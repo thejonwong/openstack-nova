@@ -2,29 +2,8 @@
 # This file should be owned by (and only-writeable by) the root user
 
 [Filters]
-# nova/virt/libvirt/vif.py: 'ip', 'tuntap', 'add', dev, 'mode', 'tap'
-# nova/virt/libvirt/vif.py: 'ip', 'link', 'set', dev, 'up'
-# nova/virt/libvirt/vif.py: 'ip', 'link', 'delete', dev
-# nova/network/linux_net.py: 'ip', 'addr', 'add', str(floating_ip)+'/32'i..
-# nova/network/linux_net.py: 'ip', 'addr', 'del', str(floating_ip)+'/32'..
-# nova/network/linux_net.py: 'ip', 'addr', 'add', '169.254.169.254/32',..
-# nova/network/linux_net.py: 'ip', 'addr', 'show', 'dev', dev, 'scope',..
-# nova/network/linux_net.py: 'ip', 'addr', 'del/add', ip_params, dev)
-# nova/network/linux_net.py: 'ip', 'addr', 'del', params, fields[-1]
-# nova/network/linux_net.py: 'ip', 'addr', 'add', params, bridge
-# nova/network/linux_net.py: 'ip', '-f', 'inet6', 'addr', 'change', ..
-# nova/network/linux_net.py: 'ip', 'link', 'set', 'dev', dev, 'promisc',..
-# nova/network/linux_net.py: 'ip', 'link', 'add', 'link', bridge_if ...
-# nova/network/linux_net.py: 'ip', 'link', 'set', interface, address,..
-# nova/network/linux_net.py: 'ip', 'link', 'set', interface, 'up'
-# nova/network/linux_net.py: 'ip', 'link', 'set', bridge, 'up'
-# nova/network/linux_net.py: 'ip', 'addr', 'show', 'dev', interface, ..
-# nova/network/linux_net.py: 'ip', 'link', 'set', dev, address, ..
-# nova/network/linux_net.py: 'ip', 'link', 'set', dev, 'up'
-# nova/network/linux_net.py: 'ip', 'route', 'add', ..
-# nova/network/linux_net.py: 'ip', 'route', 'del', .
-# nova/network/linux_net.py: 'ip', 'route', 'show', 'dev', dev
-ip: CommandFilter, ip, root
+# nova/network/freebsd_net.py: 'ifconfig', 'lo0', 'alias', ..
+ifconfig: CommandFilter, ifconfig, root
 
 # nova/virt/libvirt/vif.py: 'ovs-vsctl', ...
 # nova/virt/libvirt/vif.py: 'ovs-vsctl', 'del-port', ...
