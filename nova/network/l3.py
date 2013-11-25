@@ -126,12 +126,7 @@ class FreeBSDNetL3(L3Driver):
         freebsd_net.ensure_vpn_forward(public_ip, port, private_ip)
 
     def remove_vpn(self, public_ip, port, private_ip):
-        # Linux net currently doesn't implement any way of removing
-        # the VPN forwarding rules
         pass
-
-    def clean_conntrack(self, fixed_ip):
-        freebsd_net.clean_conntrack(fixed_ip)
 
     def teardown(self):
         pass
