@@ -5,6 +5,9 @@
 # nova/network/freebsd_net.py: 'ifconfig', 'lo0', 'alias', ..
 ifconfig: CommandFilter, ifconfig, root
 
+# nova/network/freebsd_net.py: 'route', ..
+route: CommandFilter, route, root
+
 # nova/network/linux_net.py: 'dhcp_release', dev, address, mac_address
 #dhcp_release: CommandFilter, dhcp_release, root
 
