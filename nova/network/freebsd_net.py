@@ -94,10 +94,22 @@ def _ifconfig_cmd(netif, params = []):
 
 
 def device_exists(device):
-    """Check if Ethernet device exists."""
+    """Check if network device exists."""
     (_out, err) = _execute(*_ifconfig_cmd(device),
         check_exit_code=False, run_as_root=True)
     return not err
+
+
+def delete_net_dev(dev):
+    """Delete network device if exists."""
+    if device_exists(dev):
+        try:
+            _execute(*_ifconfig_cmd(bridge, ['destroy']),
+                 run_as_root=True, check_exit_code=0)
+            LOG.debug(_("Network device removed: '%s'"), dev)
+        except processutils.ProcessExecutionError:
+            with excutils.save_and_reraise_exception():
+                LOG.error(_("Failed removing network device: '%s'"), dev)
 
 
 interface_driver = None
@@ -105,8 +117,8 @@ interface_driver = None
 def _get_interface_driver():
     global interface_driver
     if not interface_driver:
-        interface_driver = importutils.import_object(
-                CONF.freebsd_net_interface_driver)
+        interface_driver =
+            importutils.import_object(CONF.freebsd_net_interface_driver)
     return interface_driver
 
 
@@ -192,10 +204,6 @@ class FreeBSDBridgeInterfaceDriver(FreeBSDNetInterfaceDriver):
         """
         if not device_exists(bridge):
             LOG.debug(_('Starting Bridge %s'), bridge)
-#            _execute('ifconfig', bridge, 'create', run_as_root=True)
-#            _execute('ifconfig', bridge, 'up', run_as_root=True)
-
-            # Create bridge
             out, err = _execute(*_ifconfig_cmd(bridge, ['create']),
                  run_as_root=True, check_exit_code=0)
             out, err = _execute(*_ifconfig_cmd(bridge, ['up']),
@@ -204,14 +212,10 @@ class FreeBSDBridgeInterfaceDriver(FreeBSDNetInterfaceDriver):
         if interface:
             msg = _('Adding interface %(interface)s to bridge %(bridge)s')
             LOG.debug(msg, {'interface': interface, 'bridge': bridge})
-#            out, err = _execute('ifconfig', bridge, 'addm', interface,
-#                                check_exit_code=False, run_as_root=True)
-#            out, err = _execute('ifconfig', interface, 'up',
-#                                check_exit_code=False, run_as_root=True)
 
             # Add interface to the bridge
             params = ['addm', interface]
-            _execute(*_ifconfig_cmd(bridge, params),
+            out, err = _execute(*_ifconfig_cmd(bridge, params),
                  run_as_root=True, check_exit_code=0)
             out, err = _execute(*_ifconfig_cmd(interface, ['up']),
                  run_as_root=True, check_exit_code=0)
@@ -263,6 +267,7 @@ class FreeBSDBridgeInterfaceDriver(FreeBSDNetInterfaceDriver):
 
         if filtering:
             # Don't forward traffic unless we were told to be a gateway
+            # TODO
             """
             ipv4_filter = iptables_manager.ipv4['filter']
             if gateway:
@@ -280,24 +285,23 @@ class FreeBSDBridgeInterfaceDriver(FreeBSDNetInterfaceDriver):
     @utils.synchronized('lock_bridge', external=True)
     def remove_bridge(bridge, gateway=True, filtering=True):
         """Delete a bridge."""
-        if not device_exists(bridge):
-            return
-        else:
-            if filtering:
-                ipv4_filter = iptables_manager.ipv4['filter']
-                if gateway:
-                    for rule in get_gateway_rules(bridge):
-                        ipv4_filter.remove_rule(*rule)
-                else:
-                    drop_actions = ['DROP']
-                    if CONF.iptables_drop_action != 'DROP':
-                        drop_actions.append(CONF.iptables_drop_action)
+        if filtering:
+            # TODO
+            """
+            ipv4_filter = iptables_manager.ipv4['filter']
+            if gateway:
+                for rule in get_gateway_rules(bridge):
+                    ipv4_filter.remove_rule(*rule)
+            else:
+                drop_actions = ['DROP']
+                if CONF.iptables_drop_action != 'DROP':
+                    drop_actions.append(CONF.iptables_drop_action)
 
-                    for drop_action in drop_actions:
-                        ipv4_filter.remove_rule('FORWARD',
-                                                ('--in-interface %s -j %s'
-                                                 % (bridge, drop_action)))
-                        ipv4_filter.remove_rule('FORWARD',
-                                                ('--out-interface %s -j %s'
-                                                 % (bridge, drop_action)))
-            delete_net_dev(bridge)
+                for drop_action in drop_actions:
+                    ipv4_filter.remove_rule('FORWARD',
+                                            ('--in-interface %s -j %s'
+                                             % (bridge, drop_action)))
+                    ipv4_filter.remove_rule('FORWARD',
+                                            ('--out-interface %s -j %s'
+                                             % (bridge, drop_action)))"""
+        delete_net_dev(bridge)
