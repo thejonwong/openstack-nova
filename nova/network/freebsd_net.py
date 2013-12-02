@@ -435,3 +435,8 @@ def initialize_gateway_device(dev, network_ref):
         """
         _execute('ip', '-f', 'inet6', 'addr', 'change', network_ref['cidr_v6'],
                  'dev', dev, run_as_root=True)"""
+
+
+def update_dhcp(context, dev, network_ref):
+    # TODO
+    LOG.debug("CALLED")
