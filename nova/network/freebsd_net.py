@@ -93,11 +93,100 @@ def _ifconfig_cmd(netif, params = []):
     return cmd
 
 
+def _address_to_cidr(address, netmask):
+    """Produce a CIDR format address/netmask."""
+    out, err = _execute('netmask', '-nc',
+        '%s/%s' % (address, netmask), check_exit_code=0)
+    nm = out.strip().split('/')[1]
+    return "%s/%s" % (address, nm)
+
+
+def _route_list(interface):
+    """Get list of routes handled by the interface."""
+    routes = []
+    out, err = _execute('netstat', '-nrW', '-f', 'inet')
+
+    for line in out.split('\n'):
+        fields = line.split()
+        if len(fields) > 2 and fields[6] == interface:
+            if fields[2].count("G"):
+                routes.append(fields)
+    return routes
+
+
+def _ip_list(interface):
+    """Get list of IP params for the interface."""
+    iplist = []
+    out, err = _execute(*_ifconfig_cmd(interface))
+    for line in out.split('\n'):
+        fields = line.split()
+        if fields and fields[0] == 'inet':
+            iplist.append(fields)
+    return iplist
+
+
+def _delete_ip_from_list(iplist, interface):
+    """The list is supposed to be in ifconfig format."""
+    out = err = ''
+    for fields in iplist:
+        params = ['inet']
+        params.extend(fields)
+        params.extend(['delete'])
+        out, err = _execute(*_ifconfig_cmd(interface, params),
+            run_as_root=True, check_exit_code=0)
+    return (out, err)
+
+
+def _add_ip_from_list(iplist, interface):
+    """The list is supposed to be in ifconfig format."""
+    out = err = ''
+    for fields in iplist:
+        params = ['inet']
+        params.extend(fields)
+        params.extend(['add'])
+        out, err = _execute(*_ifconfig_cmd(interface, params),
+            run_as_root=True, check_exit_code=0)
+    return (out, err)
+
+
+def _delete_routes_from_list(routelist):
+    """The list is supposed to be in netstat format."""
+    out = err = ''
+    for fields in routelist:
+        dest = fields[0]
+        gw = fields[1]
+        out, err = _execute(*_route_cmd('delete', dest, gw),
+            run_as_root=True, check_exit_code=0)
+    return (out, err)
+
+
+def _add_routes_from_list(routelist):
+    """The list is supposed to be in netstat format."""
+    out = err = ''
+    for fields in routelist:
+        dest = fields[0]
+        gw = fields[1]
+        out, err = _execute(*_route_cmd('add', dest, gw),
+            run_as_root=True, check_exit_code=0)
+    return (out, err)
+
+
 def device_exists(device):
     """Check if network device exists."""
-    (_out, err) = _execute(*_ifconfig_cmd(device),
+    _out, err = _execute(*_ifconfig_cmd(device),
         check_exit_code=False, run_as_root=True)
     return not err
+
+
+def device_is_bridge_member(bridge, device):
+    """Check if network device is already a bridge member."""
+    out, err = _execute(*_ifconfig_cmd(bridge))
+    rv = False
+    for line in out.split('\n'):
+        fields = line.split()
+        if fields and fields[0] == 'member:' and fields[1] == device:
+            rv = True
+    return rv
 
 
 def delete_net_dev(dev):
@@ -117,7 +206,7 @@ interface_driver = None
 def _get_interface_driver():
     global interface_driver
     if not interface_driver:
-        interface_driver =
+        interface_driver = \
             importutils.import_object(CONF.freebsd_net_interface_driver)
     return interface_driver
 
@@ -214,52 +303,30 @@ class FreeBSDBridgeInterfaceDriver(FreeBSDNetInterfaceDriver):
             LOG.debug(msg, {'interface': interface, 'bridge': bridge})
 
             # Add interface to the bridge
-            params = ['addm', interface]
-            out, err = _execute(*_ifconfig_cmd(bridge, params),
-                 run_as_root=True, check_exit_code=0)
+            if not device_is_bridge_member(bridge, interface):
+                params = ['addm', interface]
+                out, err = _execute(*_ifconfig_cmd(bridge, params),
+                     run_as_root=True, check_exit_code=0)
+            else:
+                LOG.debug("Interface %s already a member of bridge %s",
+                    interface, bridge)
+
             out, err = _execute(*_ifconfig_cmd(interface, ['up']),
                  run_as_root=True, check_exit_code=0)
 
             # Find existing routes
-            existing_routes = []
-            out, err = _execute('netstat', '-nr', '-f', 'inet')
-            for line in out.split('\n'):
-                fields = line.split()
-                if fields and fields[-1] == interface:
-                    if fields[2].count("G"):
-                        existing_routes.append(fields)
+            existing_routes = _route_list(interface)
+            _delete_routes_from_list(existing_routes)
 
             # Find existing IP addresses on the i/f
-            existing_ips = []
-            out, err = _execute(*_ifconfig_cmd(interface))
-            for line in out.split('\n'):
-                fields = line.split()
-                if fields and fields[0] == 'inet':
-                    existing_ips.append(fields)
+            existing_ips = _ip_list(interface)
 
-            # Reassign IP addresses to the bridge
-            for fields in existing_ips:
-                addr = fields[1]
-                netmask = fields[3]
-
-                params = ['inet', addr, 'netmask', netmask, 'delete']
-                _execute(*_ifconfig_cmd(interface, params),
-                     run_as_root=True, check_exit_code=0)
-
-                params = ['inet', addr, 'netmask', netmask, 'alias']
-                _execute(*_ifconfig_cmd(bridge, params),
-                     run_as_root=True, check_exit_code=0)
+            # Move IP addresses from i/f to the bridge
+            _delete_ip_from_list(existing_ips, interface)
+            _add_ip_from_list(existing_ips, bridge)
 
             # Re-add routes
-            for fields in existing_routes:
-                dest = fields[0]
-                gw = fields[1]
-                netif = fields[-1]
-
-                _execute(*_route_cmd('delete', dest, gw),
-                     run_as_root=True, check_exit_code=0)
-                _execute(*_route_cmd('add', dest, gw),
-                     run_as_root=True, check_exit_code=0)
+            _add_routes_from_list(existing_routes)
 
             if (err):
                 msg = _('Failed to add interface: %s') % err
@@ -305,3 +372,66 @@ class FreeBSDBridgeInterfaceDriver(FreeBSDNetInterfaceDriver):
                                             ('--out-interface %s -j %s'
                                              % (bridge, drop_action)))"""
         delete_net_dev(bridge)
+
+
+@utils.synchronized('lock_gateway', external=True)
+def initialize_gateway_device(dev, network_ref):
+    if not network_ref:
+        return
+
+    LOG.debug(_('Initializing gateway %s'), dev)
+
+    _execute('sysctl', 'net.inet.ip.forwarding=1', run_as_root=True)
+
+    gw_ip = '%s/%s' % (network_ref['dhcp_server'],
+                         network_ref['cidr'].rpartition('/')[2])
+    LOG.debug(gw_ip)
+
+    new_ips = [[gw_ip, 'broadcast', network_ref['broadcast']]]
+    interface = dev
+
+    # Find existing IPs
+    existing_ips = []
+    out, err = _execute(*_ifconfig_cmd(interface))
+    for line in out.split('\n'):
+        fields = line.split()
+        if fields and fields[0] == 'inet':
+            params = fields[1:]
+            existing_ips.append(params)
+            this_ip = _address_to_cidr(fields[1], fields[3])
+            if this_ip is not gw_ip:
+                new_ips.append(params)
+
+    # TODO add comment describing overall process...
+
+    # Get the first address from existing list
+    first_ip = ''
+    if existing_ips:
+        first_ip = _address_to_cidr(existing_ips[0][0], existing_ips[0][2])
+    if not existing_ips or first_ip is not gw_ip:
+        existing_routes = _route_list(interface)
+
+        # Delete existing routes
+        LOG.debug('Delete routes: %s', existing_routes)
+        _delete_routes_from_list(existing_routes)
+
+        # Delete existing IPs
+        LOG.debug('Delete IPs: %s', existing_ips)
+        _delete_ip_from_list(existing_ips, interface)
+
+        # Restore IP config
+        LOG.debug('NewIPs: %s', new_ips)
+        _add_ip_from_list(new_ips, interface)
+
+        # Restore routes
+        LOG.debug('Re-add routes: %s', existing_routes)
+        _add_routes_from_list(existing_routes)
+
+        if CONF.send_arp_for_ha and CONF.send_arp_for_ha_count > 0:
+            """
+            send_arp_for_ip(network_ref['dhcp_server'], dev,
+                            CONF.send_arp_for_ha_count)"""
+    if CONF.use_ipv6:
+        """
+        _execute('ip', '-f', 'inet6', 'addr', 'change', network_ref['cidr_v6'],
+                 'dev', dev, run_as_root=True)"""
