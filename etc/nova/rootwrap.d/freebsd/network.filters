@@ -18,5 +18,5 @@ route: CommandFilter, route, root
 # nova/network/linux_net.py: dnsmasq call
 #dnsmasq: EnvFilter, env, root, CONFIG_FILE=, NETWORK_ID=, dnsmasq
 
-# nova/network/linux_net.py: 'sysctl', ....
+# nova/network/freebsd_net.py: 'sysctl', ....
 sysctl: CommandFilter, sysctl, root
