@@ -18,19 +18,27 @@
 """Implements FreeBSD networking."""
 
 import inspect
+import netaddr
+import os
 
 from oslo.config import cfg
 
+from nova import db
 from nova import exception
+from nova.openstack.common import fileutils
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
+from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
+from nova import paths
 from nova import utils
-
 
 LOG = logging.getLogger(__name__)
 
 freebsd_net_opts = [
+    cfg.StrOpt('dhcpbridge',
+               default=paths.bindir_def('nova-dhcpbridge'),
+               help='location of nova-dhcpbridge'),
     cfg.StrOpt('freebsd_net_interface_driver',
                default='nova.network.freebsd_net.FreeBSDBridgeInterfaceDriver',
                help='Driver used to create Ethernet devices.'),
@@ -47,7 +55,6 @@ CONF.register_opts(freebsd_net_opts)
 CONF.import_opt('host', 'nova.netconf')
 CONF.import_opt('use_ipv6', 'nova.netconf')
 CONF.import_opt('my_ip', 'nova.netconf')
-
 
 def metadata_forward():
     """TODO"""
@@ -437,6 +444,255 @@ def initialize_gateway_device(dev, network_ref):
                  'dev', dev, run_as_root=True)"""
 
 
+def get_dhcp_leases(context, network_ref):
+    """Return a network's hosts config in dnsmasq leasefile format."""
+    hosts = []
+    host = None
+    if network_ref['multi_host']:
+        host = CONF.host
+    for data in db.network_get_associated_fixed_ips(context,
+                                                    network_ref['id'],
+                                                    host=host):
+        # NOTE(cfb): Don't return a lease entry if the IP isn't
+        #            already leased
+        if data['allocated'] and data['leased']:
+            hosts.append(_host_lease(data))
+
+    return '\n'.join(hosts)
+
+
+def get_dhcp_hosts(context, network_ref):
+    """Get network's hosts config in dhcp-host format."""
+    hosts = []
+    host = None
+    if network_ref['multi_host']:
+        host = CONF.host
+    macs = set()
+    for data in db.network_get_associated_fixed_ips(context,
+                                                    network_ref['id'],
+                                                    host=host):
+        if data['vif_address'] not in macs:
+            hosts.append(_host_dhcp(data))
+            macs.add(data['vif_address'])
+    return '\n'.join(hosts)
+
+
+def get_dns_hosts(context, network_ref):
+    """Get network's DNS hosts in hosts format."""
+    hosts = []
+    for data in db.network_get_associated_fixed_ips(context,
+                                                    network_ref['id']):
+        hosts.append(_host_dns(data))
+    return '\n'.join(hosts)
+
+
+def get_dhcp_opts(context, network_ref):
+    """Get network's hosts config in dhcp-opts format."""
+    hosts = []
+    host = None
+    if network_ref['multi_host']:
+        host = CONF.host
+    data = db.network_get_associated_fixed_ips(context,
+                                               network_ref['id'],
+                                               host=host)
+
+    if data:
+        instance_set = set([datum['instance_uuid'] for datum in data])
+        default_gw_vif = {}
+        for instance_uuid in instance_set:
+            vifs = db.virtual_interface_get_by_instance(context,
+                                                        instance_uuid)
+            if vifs:
+                #offer a default gateway to the first virtual interface
+                default_gw_vif[instance_uuid] = vifs[0]['id']
+
+        for datum in data:
+            instance_uuid = datum['instance_uuid']
+            if instance_uuid in default_gw_vif:
+                # we don't want default gateway for this fixed ip
+                if default_gw_vif[instance_uuid] != datum['vif_id']:
+                    hosts.append(_host_dhcp_opts(datum))
+    return '\n'.join(hosts)
+
+
+def release_dhcp(dev, address, mac_address):
+    utils.execute('dhcp_release', dev, address, mac_address, run_as_root=True)
+
+
 def update_dhcp(context, dev, network_ref):
-    # TODO
-    LOG.debug("CALLED")
+    conffile = _dhcp_file(dev, 'conf')
+    write_to_file(conffile, get_dhcp_hosts(context, network_ref))
+    restart_dhcp(context, dev, network_ref)
+
+
+def update_dns(context, dev, network_ref):
+    hostsfile = _dhcp_file(dev, 'hosts')
+    write_to_file(hostsfile, get_dns_hosts(context, network_ref))
+    restart_dhcp(context, dev, network_ref)
+
+
+def update_dhcp_hostfile_with_text(dev, hosts_text):
+    conffile = _dhcp_file(dev, 'conf')
+    write_to_file(conffile, hosts_text)
+
+
+def _host_lease(data):
+    """Return a host string for an address in leasefile format."""
+    timestamp = timeutils.utcnow()
+    seconds_since_epoch = calendar.timegm(timestamp.utctimetuple())
+    return '%d %s %s %s *' % (seconds_since_epoch + CONF.dhcp_lease_time,
+                              data['vif_address'],
+                              data['address'],
+                              data['instance_hostname'] or '*')
+
+
+def _host_dhcp_network(data):
+    return 'NW-%s' % data['vif_id']
+
+
+def _host_dhcp(data):
+    """Return a host string for an address in dhcp-host format."""
+    if CONF.use_single_default_gateway:
+        return '%s,%s.%s,%s,%s' % (data['vif_address'],
+                               data['instance_hostname'],
+                               CONF.dhcp_domain,
+                               data['address'],
+                               'net:' + _host_dhcp_network(data))
+    else:
+        return '%s,%s.%s,%s' % (data['vif_address'],
+                               data['instance_hostname'],
+                               CONF.dhcp_domain,
+                               data['address'])
+
+
+def _host_dns(data):
+    return '%s\t%s.%s' % (data['address'],
+                          data['instance_hostname'],
+                          CONF.dhcp_domain)
+
+
+def _host_dhcp_opts(data):
+    """Return an empty gateway option."""
+    return '%s,%s' % (_host_dhcp_network(data), 3)
+
+
+def _dhcp_file(dev, kind):
+    """Return path to a pid, leases, hosts or conf file for a bridge/device."""
+    fileutils.ensure_tree(CONF.networks_path)
+    return os.path.abspath('%s/nova-%s.%s' % (CONF.networks_path,
+                                              dev,
+                                              kind))
+
+
+def _dnsmasq_pid_for(dev):
+    """Returns the pid for prior dnsmasq instance for a bridge/device.
+
+    Returns None if no pid file exists.
+
+    If machine has rebooted pid might be incorrect (caller should check).
+
+    """
+    pid_file = _dhcp_file(dev, 'pid')
+
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file, 'r') as f:
+                return int(f.read())
+        except (ValueError, IOError):
+            return None
+
+
+# NOTE(ja): Sending a HUP only reloads the hostfile, so any
+#           configuration options (like dchp-range, vlan, ...)
+#           aren't reloaded.
+@utils.synchronized('dnsmasq_start')
+def restart_dhcp(context, dev, network_ref):
+    """(Re)starts a dnsmasq server for a given network.
+
+    If a dnsmasq instance is already running then send a HUP
+    signal causing it to reload, otherwise spawn a new instance.
+
+    """
+    conffile = _dhcp_file(dev, 'conf')
+    LOG.debug('CONF %s', conffile)
+
+    if CONF.use_single_default_gateway:
+        # NOTE(vish): this will have serious performance implications if we
+        #             are not in multi_host mode.
+        optsfile = _dhcp_file(dev, 'opts')
+        write_to_file(optsfile, get_dhcp_opts(context, network_ref))
+        os.chmod(optsfile, 0o644)
+
+#    if network_ref['multi_host']:
+#        _add_dhcp_mangle_rule(dev)
+
+    # Make sure dnsmasq can actually read it (it setuid()s to "nobody")
+    os.chmod(conffile, 0o644)
+
+    pid = _dnsmasq_pid_for(dev)
+
+    # if dnsmasq is already running, then tell it to reload
+    if pid:
+        out, _err = _execute('cat', '/proc/%d/cmdline' % pid,
+                             check_exit_code=False)
+        # Using symlinks can cause problems here so just compare the name
+        # of the file itself
+        if conffile.split('/')[-1] in out:
+            try:
+                _execute('kill', '-HUP', pid, run_as_root=True)
+                _add_dnsmasq_accept_rules(dev)
+                return
+            except Exception as exc:  # pylint: disable=W0703
+                LOG.error(_('Hupping dnsmasq threw %s'), exc)
+        else:
+            LOG.debug(_('Pid %d is stale, relaunching dnsmasq'), pid)
+
+    cmd = ['env',
+           'CONFIG_FILE=%s' % jsonutils.dumps(CONF.dhcpbridge_flagfile),
+           'NETWORK_ID=%s' % str(network_ref['id']),
+           'dnsmasq',
+           '--strict-order',
+           '--bind-interfaces',
+           '--conf-file=%s' % CONF.dnsmasq_config_file,
+           '--pid-file=%s' % _dhcp_file(dev, 'pid'),
+           '--listen-address=%s' % network_ref['dhcp_server'],
+           '--except-interface=lo',
+           '--dhcp-range=set:%s,%s,static,%s,%ss' %
+                         (network_ref['label'],
+                          network_ref['dhcp_start'],
+                          network_ref['netmask'],
+                          CONF.dhcp_lease_time),
+           '--dhcp-lease-max=%s' % len(netaddr.IPNetwork(network_ref['cidr'])),
+           '--dhcp-hostsfile=%s' % _dhcp_file(dev, 'conf'),
+           '--dhcp-script=%s' % CONF.dhcpbridge,
+           '--leasefile-ro']
+
+    # dnsmasq currently gives an error for an empty domain,
+    # rather than ignoring.  So only specify it if defined.
+    if CONF.dhcp_domain:
+        cmd.append('--domain=%s' % CONF.dhcp_domain)
+
+    dns_servers = set(CONF.dns_server)
+    if CONF.use_network_dns_servers:
+        if network_ref.get('dns1'):
+            dns_servers.add(network_ref.get('dns1'))
+        if network_ref.get('dns2'):
+            dns_servers.add(network_ref.get('dns2'))
+    if network_ref['multi_host'] or dns_servers:
+        cmd.append('--no-hosts')
+    if network_ref['multi_host']:
+        cmd.append('--addn-hosts=%s' % _dhcp_file(dev, 'hosts'))
+    if dns_servers:
+        cmd.append('--no-resolv')
+    for dns_server in dns_servers:
+        cmd.append('--server=%s' % dns_server)
+    if CONF.use_single_default_gateway:
+        cmd += ['--dhcp-optsfile=%s' % _dhcp_file(dev, 'opts')]
+
+    _execute(*cmd, run_as_root=True)
+    #_add_dnsmasq_accept_rules(dev)
+
+
+def write_to_file(file, data, mode='w'):
+    with open(file, mode) as f:
+        f.write(data)
