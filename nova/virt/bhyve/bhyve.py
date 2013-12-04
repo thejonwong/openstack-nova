@@ -16,6 +16,7 @@
 #    under the License.
 
 from os import listdir
+from os import path
 
 from oslo.config import cfg
 
@@ -100,6 +101,9 @@ class Bhyve:
         """
         def is_alive(name):
             if name not in self._running_vms:
+                return False
+            if not path.isdir(_DEV_VMM):
+                # If there is no VM running /dev/vmm doesn't exist.
                 return False
             if name not in listdir(_DEV_VMM):
                 del self._running_vms[name]

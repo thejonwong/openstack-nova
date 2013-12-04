@@ -115,6 +115,7 @@ class TestBhyve(test.NoDBTestCase):
             return ['VM1', 'VM2']
 
         self.stubs.Set(bhyve, 'listdir', fake_listdir)
+        self.stubs.Set(bhyve.path, 'isdir', lambda _: True)
 
 
         def fake_get_config(vm):
