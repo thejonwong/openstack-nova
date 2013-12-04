@@ -15,9 +15,18 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import os
+
+from oslo.config import cfg
+
 from nova import test
 from nova.virt.bhyve import bhyve
+from nova.virt.bhyve import images
 from nova import utils
+
+
+CONF = cfg.CONF
+CONF.import_opt('instances_path', 'nova.compute.manager')
 
 
 class TestBhyve(test.NoDBTestCase):
@@ -209,3 +218,24 @@ class TestVm(test.NoDBTestCase):
         self.assertEqual(cfg.block_devices, {'/path/to/disk': 'ahci-hd'})
         self.assertEqual(cfg.boot_device, '/path/to/disk')
 
+
+class TestImages(test.NoDBTestCase):
+    def setUp(self):
+        super(TestImages, self).setUp()
+
+        self.flags(instances_path='/tmp/')
+
+
+    def test_delete_instance_files(self):
+        instance = {}
+        instance['uuid'] = '1234567890'
+
+        path = os.path.join(CONF.instances_path, instance['uuid'])
+        print path
+
+        open(path, 'a').close()
+
+        images.delete_instance_image(instance)
+
+        exists = os.path.exists(path)
+        self.assertEqual(False, exists)
