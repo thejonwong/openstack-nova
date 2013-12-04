@@ -32,6 +32,9 @@ from nova.openstack.common import log as logging
 from nova.virt import driver
 from nova.virt import virtapi
 
+import images
+import bhyve
+
 CONF = cfg.CONF
 CONF.import_opt('host', 'nova.netconf')
 
@@ -76,8 +79,8 @@ class BhyveInstance(object):
 
 class BhyveDriver(driver.ComputeDriver):
     capabilities = {
-        "has_imagecache": True,
-        "supports_recreate": True,
+        "has_imagecache": False,
+        "supports_recreate": False,
         }
 
     """Fake bhyve driver."""
@@ -103,6 +106,8 @@ class BhyveDriver(driver.ComputeDriver):
         if not _FAKE_NODES:
             set_nodes([CONF.host])
 
+        self._bhyve = bhyve.Bhyve()
+
     def init_host(self, host):
         return
 
@@ -123,6 +128,14 @@ class BhyveDriver(driver.ComputeDriver):
         state = power_state.RUNNING
         fake_instance = BhyveInstance(name, state)
         self.instances[name] = fake_instance
+
+        image_path = images.fetch(context, instance, image_meta,
+                                  injected_files, admin_password)
+
+        vm = bhyve.Vm(self._bhyve, instance['name'], instance['vcpus'],
+                      instance['memory_mb'])
+        vm.add_disk_image('ahci-hd', image_path, boot=True)
+        vm.run()
 
     def snapshot(self, context, instance, name, update_task_state):
         if instance['name'] not in self.instances:
@@ -205,6 +218,13 @@ class BhyveDriver(driver.ComputeDriver):
             LOG.warning(_("Key '%(key)s' not in instances '%(inst)s'") %
                         {'key': key,
                          'inst': self.instances}, instance=instance)
+
+        vm = self._bhyve.get_vm_by_name(instance['name'])
+        if vm:
+            vm.destroy()
+
+        if destroy_disks:
+            images.delete_instance_image(instance)
 
     def attach_volume(self, context, connection_info, instance, mountpoint,
                       encryption=None):
