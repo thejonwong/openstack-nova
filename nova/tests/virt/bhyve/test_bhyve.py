@@ -49,7 +49,7 @@ class TestBhyve(test.NoDBTestCase):
 
     def test_build_bhyveload_cmd(self):
         result = ['bhyveload', '-d', self._vm.get_config().boot_device,
-                  '-m', self._vm.get_config().mem_size,
+                  '-m', str(self._vm.get_config().mem_size),
                   self._vm.get_config().name]
 
         cmd = self._bhyve._build_bhyveload_cmd(self._vm.get_config())
@@ -64,6 +64,7 @@ class TestBhyve(test.NoDBTestCase):
         result += [
             '-s', '1:0,ahci-hd,/path/to/disk',
             '-s', '2:0,virtio-net,tap0',
+            '-m', '1024',
             'VM1'
         ]
 
@@ -76,7 +77,8 @@ class TestBhyve(test.NoDBTestCase):
         expected = [
             (
                 'bhyveload', '-d', self._vm.get_config().boot_device,
-                '-m', self._vm.get_config().mem_size, self._vm.get_config().name
+                '-m', str(self._vm.get_config().mem_size),
+                self._vm.get_config().name
             ),
             (
                 'tmux', 'new', '-d', '-s', self._vm.get_config().name,
@@ -84,13 +86,14 @@ class TestBhyve(test.NoDBTestCase):
                          self._bhyve._pci_params +
                          ['-s', '1:0,ahci-hd,/path/to/disk',
                          '-s', '2:0,virtio-net,tap0',
+                         '-m', str(self._vm.get_config().mem_size),
                          self._vm.get_config().name])
             )
         ]
 
         self._bhyve.spawn_vm(self._vm)
 
-        self.assertEqual(self._executes, expected)
+        self.assertEqual(expected, self._executes)
         self.assertEqual({self._vm.get_config().name: self._vm},
                          self._bhyve._running_vms)
 

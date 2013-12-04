@@ -179,7 +179,7 @@ class Bhyve:
         :returns: A list consisting of the command and parameters.
         """
         return [_BHYVELOAD, '-d', vm_config.boot_device,
-            '-m', vm_config.mem_size, vm_config.name]
+            '-m', str(vm_config.mem_size), vm_config.name]
 
 
     def _build_bhyve_cmd(self, vm_config):
@@ -206,7 +206,7 @@ class Bhyve:
             i += 1
 
         return [_BHYVE] + self._default_params + self._pci_params + pci_opts \
-            + [vm_config.name]
+            + ['-m',  str(vm_config.mem_size)] + [vm_config.name]
 
 
 class Vm:
