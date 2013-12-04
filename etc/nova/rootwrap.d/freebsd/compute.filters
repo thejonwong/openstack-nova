@@ -209,3 +209,9 @@ rpc.mountd: CommandFilter, rpc.mountd, root
 
 # nova/virt/libvirt/utils.py:
 rbd: CommandFilter, rbd, root
+
+# nova/virt/bhyve/bhyve.py
+bhyveload: CommandFilter, bhyveload, root
+bhyve: CommandFilter, bhyve, root
+bhyvectl: CommandFilter, bhyvectl, root
+tmux: CommandFilter, tmux, root
