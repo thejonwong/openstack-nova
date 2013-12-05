@@ -20,6 +20,7 @@
 import inspect
 import netaddr
 import os
+import signal
 
 from oslo.config import cfg
 
@@ -633,18 +634,9 @@ def restart_dhcp(context, dev, network_ref):
 
     # if dnsmasq is already running, then tell it to reload
     if pid:
-        out, _err = _execute('cat', '/proc/%d/cmdline' % pid,
-                             check_exit_code=False)
-        # Using symlinks can cause problems here so just compare the name
-        # of the file itself
-        if conffile.split('/')[-1] in out:
-            try:
-                _execute('kill', '-HUP', pid, run_as_root=True)
-                _add_dnsmasq_accept_rules(dev)
-                return
-            except Exception as exc:  # pylint: disable=W0703
-                LOG.error(_('Hupping dnsmasq threw %s'), exc)
-        else:
+        try:
+            os.kill(pid, signal.SIGHUP)
+        except OSError:
             LOG.debug(_('Pid %d is stale, relaunching dnsmasq'), pid)
 
     cmd = ['env',
@@ -656,7 +648,7 @@ def restart_dhcp(context, dev, network_ref):
            '--conf-file=%s' % CONF.dnsmasq_config_file,
            '--pid-file=%s' % _dhcp_file(dev, 'pid'),
            '--listen-address=%s' % network_ref['dhcp_server'],
-           '--except-interface=lo',
+           '--except-interface=lo0',
            '--dhcp-range=set:%s,%s,static,%s,%ss' %
                          (network_ref['label'],
                           network_ref['dhcp_start'],
