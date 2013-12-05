@@ -30,6 +30,10 @@ CONF.import_opt('instances_path', 'nova.compute.manager')
 LOG = logging.getLogger(__name__)
 
 
+def get_instance_image_path(instance):
+    return os.path.join(CONF.instances_path, instance['uuid'])
+
+
 def fetch(context, instance, image_meta, injected_files, admin_password):
     path = os.path.join(CONF.instances_path, instance['uuid'])
     virt_module_fetch(context, instance['image_ref'], path, instance['user_id'],

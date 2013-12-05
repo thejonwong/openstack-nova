@@ -186,10 +186,22 @@ class BhyveDriver(driver.ComputeDriver):
         pass
 
     def power_off(self, instance):
-        pass
+        """Power off the instance.
+
+        Currently it is more 'unplug the cable' than 'power off' as bhyve does
+        not provide a way to do it cleanly yet.
+        """
+        vm = self._bhyve.get_vm_by_name(instance['name'])
+        if vm:
+            vm.destroy()
 
     def power_on(self, context, instance, network_info, block_device_info):
-        pass
+        image_path = images.get_instance_image_path(instance)
+
+        vm = bhyve.Vm(self._bhyve, instance['name'], instance['vcpus'],
+                      instance['memory_mb'])
+        vm.add_disk_image('ahci-hd', image_path, boot=True)
+        vm.run()
 
     def soft_delete(self, instance):
         pass
