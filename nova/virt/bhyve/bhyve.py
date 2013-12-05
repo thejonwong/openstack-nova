@@ -134,6 +134,12 @@ class Bhyve:
 
         :returns: A list of Vm objects of all currently running VMs.
         """
+        if not path.isdir(_DEV_VMM):
+            # If there is no /dev/vmm then clean _running_vms and return empty
+            # list
+            self._running_vms = {}
+            return []
+
         vmm_list = listdir(_DEV_VMM)
 
         # Remove from hash table VMs that have gone somehow. Generate out list.

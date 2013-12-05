@@ -197,6 +197,53 @@ class TestGetVmByName(test.NoDBTestCase):
         self.assertEqual(None, vm1)
 
 
+class TestGetRunningVmList(test.NoDBTestCase):
+    def setUp(self):
+        super(TestGetRunningVmList, self).setUp()
+
+        self._bhyve = bhyve.Bhyve()
+        self._vm1 = bhyve.Vm(self._bhyve, 'VM1', 1, 1024)
+        self._vm2 = bhyve.Vm(self._bhyve, 'VM2', 1, 1024)
+        self._vm3 = bhyve.Vm(self._bhyve, 'VM3', 1, 1024)
+        self._vm4 = bhyve.Vm(self._bhyve, 'VM4', 1, 1024)
+        self._bhyve._running_vms = {
+            'VM1': self._vm1,
+            'VM2': self._vm2,
+            'VM3': self._vm3,
+            'VM4': self._vm4
+        }
+
+        self._fake_list = ['VM1', 'VM2', 'VM3', 'VM4']
+        def fake_listdir(path):
+            return self._fake_list
+
+        self.stubs.Set(bhyve, 'listdir', fake_listdir)
+
+        self.stubs.Set(bhyve.path, 'isdir', lambda _: True)
+
+    def test_correct_list(self):
+        expected = ['VM1', 'VM2', 'VM3', 'VM4']
+        list = self._bhyve.get_running_vm_list()
+        self.assertIn('VM1', expected)
+        self.assertIn('VM2', expected)
+        self.assertIn('VM3', expected)
+        self.assertIn('VM4', expected)
+
+    def test_incorrect_list(self):
+        expected = ['VM1', 'VM4']
+        self._fake_list = ['VM1', 'VM4']
+        list = self._bhyve.get_running_vm_list()
+        self.assertIn('VM1', expected)
+        self.assertNotIn('VM2', expected)
+        self.assertNotIn('VM3', expected)
+        self.assertIn('VM4', expected)
+
+    def test_no_dev_vmm_dir(self):
+        self.stubs.Set(bhyve.path, 'isdir', lambda _: False)
+        list = self._bhyve.get_running_vm_list()
+        self.assertEqual([], list)
+
+
 class TestVm(test.NoDBTestCase):
     def setUp(self):
         super(TestVm, self).setUp()
