@@ -108,6 +108,7 @@ vmwareapi_opts = [
     ]
 
 CONF = cfg.CONF
+# vmware options in the DEFAULT group were deprecated in Icehouse
 CONF.register_opts(vmwareapi_opts, 'vmware')
 
 TIME_BETWEEN_API_CALL_RETRIES = 2.0
@@ -203,7 +204,7 @@ class VMwareESXDriver(driver.ComputeDriver):
         """Suspend the specified instance."""
         self._vmops.suspend(instance)
 
-    def resume(self, instance, network_info, block_device_info=None):
+    def resume(self, context, instance, network_info, block_device_info=None):
         """Resume the suspended VM instance."""
         self._vmops.resume(instance)
 
@@ -431,7 +432,7 @@ class VMwareVCDriver(VMwareESXDriver):
         self._vc_state = self._resources.get(first_cluster).get('vcstate')
 
     def migrate_disk_and_power_off(self, context, instance, dest,
-                                   instance_type, network_info,
+                                   flavor, network_info,
                                    block_device_info=None):
         """
         Transfers the disk of a running instance in multiple phases, turning
@@ -439,18 +440,18 @@ class VMwareVCDriver(VMwareESXDriver):
         """
         _vmops = self._get_vmops_for_compute_node(instance['node'])
         return _vmops.migrate_disk_and_power_off(context, instance,
-                                                 dest, instance_type)
+                                                 dest, flavor)
 
     def confirm_migration(self, migration, instance, network_info):
         """Confirms a resize, destroying the source VM."""
         _vmops = self._get_vmops_for_compute_node(instance['node'])
         _vmops.confirm_migration(migration, instance, network_info)
 
-    def finish_revert_migration(self, instance, network_info,
+    def finish_revert_migration(self, context, instance, network_info,
                                 block_device_info=None, power_on=True):
         """Finish reverting a resize, powering back on the instance."""
         _vmops = self._get_vmops_for_compute_node(instance['node'])
-        _vmops.finish_revert_migration(instance, network_info,
+        _vmops.finish_revert_migration(context, instance, network_info,
                                        block_device_info, power_on)
 
     def finish_migration(self, context, migration, instance, disk_info,
@@ -676,7 +677,7 @@ class VMwareVCDriver(VMwareESXDriver):
         _vmops = self._get_vmops_for_compute_node(instance['node'])
         _vmops.suspend(instance)
 
-    def resume(self, instance, network_info, block_device_info=None):
+    def resume(self, context, instance, network_info, block_device_info=None):
         """Resume the suspended VM instance."""
         _vmops = self._get_vmops_for_compute_node(instance['node'])
         _vmops.resume(instance)

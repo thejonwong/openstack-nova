@@ -79,6 +79,7 @@ xenapi_vmops_opts = [
     ]
 
 CONF = cfg.CONF
+# xenapi_vmops options in the DEFAULT group were deprecated in Icehouse
 CONF.register_opts(xenapi_vmops_opts, 'xenserver')
 CONF.import_opt('host', 'nova.netconf')
 CONF.import_opt('vncserver_proxyclient_address', 'nova.vnc')
@@ -231,7 +232,8 @@ class VMOps(object):
                                           mount_device,
                                           hotplug=False)
 
-    def finish_revert_migration(self, instance, block_device_info=None,
+    def finish_revert_migration(self, context, instance,
+                                block_device_info=None,
                                 power_on=True):
         self._restore_orig_vm_and_cleanup_orphan(instance, block_device_info,
                                                  power_on)
@@ -387,7 +389,8 @@ class VMOps(object):
         def create_vm_record_step(undo_mgr, disk_image_type,
                                   kernel_file, ramdisk_file):
             vm_ref = self._create_vm_record(context, instance, name_label,
-                    disk_image_type, kernel_file, ramdisk_file)
+                                            disk_image_type, kernel_file,
+                                            ramdisk_file, image_meta)
 
             def undo_create_vm():
                 self._destroy(instance, vm_ref, network_info=network_info)
@@ -524,8 +527,8 @@ class VMOps(object):
         if not vm_utils.is_enough_free_mem(self._session, instance):
             raise exception.InsufficientFreeMemory(uuid=instance['uuid'])
 
-    def _create_vm_record(self, context, instance, name_label,
-                          disk_image_type, kernel_file, ramdisk_file):
+    def _create_vm_record(self, context, instance, name_label, disk_image_type,
+                          kernel_file, ramdisk_file, image_meta):
         """Create the VM record in Xen, making sure that we do not create
         a duplicate name-label.  Also do a rough sanity check on memory
         to try to short-circuit a potential failure later.  (The memory
@@ -538,10 +541,13 @@ class VMOps(object):
             self._virtapi.instance_update(context,
                                           instance['uuid'], {'vm_mode': mode})
 
+        image_properties = image_meta.get("properties")
+        device_id = vm_utils.get_vm_device_id(self._session, image_properties)
         use_pv_kernel = (mode == vm_mode.XEN)
         LOG.debug(_("Using PV kernel: %s") % use_pv_kernel, instance=instance)
         vm_ref = vm_utils.create_vm(self._session, instance, name_label,
-                                    kernel_file, ramdisk_file, use_pv_kernel)
+                                    kernel_file, ramdisk_file,
+                                    use_pv_kernel, device_id)
         return vm_ref
 
     def _attach_disks(self, instance, vm_ref, name_label, vdis,
@@ -645,8 +651,6 @@ class VMOps(object):
 
         # NOTE(johngarbutt) the agent object allows all of
         # the following steps to silently fail
-        agent.update_if_needed(version)
-
         agent.inject_ssh_key()
 
         if injected_files:
@@ -656,6 +660,7 @@ class VMOps(object):
             agent.set_admin_password(admin_password)
 
         agent.resetnetwork()
+        agent.update_if_needed(version)
 
     def _prepare_instance_filter(self, instance, network_info):
         try:
@@ -1005,15 +1010,15 @@ class VMOps(object):
             raise exception.ResizeError(reason)
 
     def migrate_disk_and_power_off(self, context, instance, dest,
-                                   instance_type, block_device_info):
+                                   flavor, block_device_info):
         """Copies a VHD from one host machine to another, possibly
         resizing filesystem before hand.
 
         :param instance: the instance that owns the VHD in question.
         :param dest: the destination host machine.
-        :param instance_type: instance_type to resize to
+        :param flavor: flavor to resize to
         """
-        self._ensure_not_resize_ephemeral(instance, instance_type)
+        self._ensure_not_resize_ephemeral(instance, flavor)
 
         # 0. Zero out the progress to begin
         self._update_instance_progress(context, instance,
@@ -1021,7 +1026,7 @@ class VMOps(object):
                                        total_steps=RESIZE_TOTAL_STEPS)
 
         old_gb = instance['root_gb']
-        new_gb = instance_type['root_gb']
+        new_gb = flavor['root_gb']
         resize_down = old_gb > new_gb
 
         if new_gb == 0 and old_gb != 0:
@@ -1033,7 +1038,7 @@ class VMOps(object):
 
         if resize_down:
             self._migrate_disk_resizing_down(
-                    context, instance, dest, instance_type, vm_ref, sr_path)
+                    context, instance, dest, flavor, vm_ref, sr_path)
         else:
             self._migrate_disk_resizing_up(
                     context, instance, dest, vm_ref, sr_path)
@@ -1415,6 +1420,14 @@ class VMOps(object):
         self._acquire_bootlock(vm_ref)
         self.spawn(context, instance, image_meta, [], rescue_password,
                    network_info, name_label=rescue_name_label, rescue=True)
+
+    def set_bootable(self, instance, is_bootable):
+        """Set the ability to power on/off an instance."""
+        vm_ref = self._get_vm_opaque_ref(instance)
+        if is_bootable:
+            self._release_bootlock(vm_ref)
+        else:
+            self._acquire_bootlock(vm_ref)
 
     def unrescue(self, instance):
         """Unrescue the specified instance.
@@ -1998,6 +2011,12 @@ class VMOps(object):
                      migrate_data=None):
         try:
             vm_ref = self._get_vm_opaque_ref(instance)
+            if migrate_data is not None:
+                (kernel, ramdisk) = vm_utils.lookup_kernel_ramdisk(
+                    self._session, vm_ref)
+                migrate_data['kernel-file'] = kernel
+                migrate_data['ramdisk-file'] = ramdisk
+
             if block_migration:
                 if not migrate_data:
                     raise exception.InvalidParameterValue('Block Migration '
@@ -2020,11 +2039,17 @@ class VMOps(object):
                 self._session.call_xenapi("VM.pool_migrate", vm_ref,
                                           host_ref, {"live": "true"})
             post_method(context, instance, destination_hostname,
-                        block_migration)
+                        block_migration, migrate_data)
         except Exception:
             with excutils.save_and_reraise_exception():
                 recover_method(context, instance, destination_hostname,
                                block_migration)
+
+    def post_live_migration(self, context, instance, migrate_data=None):
+        if migrate_data is not None:
+            vm_utils.destroy_kernel_ramdisk(self._session, instance,
+                                            migrate_data.get('kernel-file'),
+                                            migrate_data.get('ramdisk-file'))
 
     def post_live_migration_at_destination(self, context, instance,
                                            network_info, block_migration,
@@ -2033,6 +2058,8 @@ class VMOps(object):
         # applied security groups, however this requires changes to XenServer
         self._prepare_instance_filter(instance, network_info)
         self.firewall_driver.apply_instance_filter(instance, network_info)
+        vm_utils.create_kernel_and_ramdisk(context, self._session, instance,
+                                           instance['name'])
 
         # NOTE(johngarbutt) workaround XenServer bug CA-98606
         vm_ref = self._get_vm_opaque_ref(instance)

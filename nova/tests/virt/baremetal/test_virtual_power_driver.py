@@ -27,9 +27,9 @@ from nova.tests.image import fake as fake_image
 from nova.tests import utils
 from nova.tests.virt.baremetal.db import base as bm_db_base
 from nova.tests.virt.baremetal.db import utils as bm_db_utils
+from nova.virt.baremetal import common as connection
 from nova.virt.baremetal import db
 from nova.virt.baremetal import virtual_power_driver
-import nova.virt.powervm.common as connection
 
 CONF = cfg.CONF
 
@@ -40,7 +40,7 @@ COMMON_FLAGS = dict(
 
 BAREMETAL_FLAGS = dict(
     driver='nova.virt.baremetal.pxe.PXE',
-    instance_type_extra_specs=['cpu_arch:test', 'test_spec:test_value'],
+    flavor_extra_specs=['cpu_arch:test', 'test_spec:test_value'],
     power_manager=
         'nova.virt.baremetal.virtual_power_driver.VirtualPowerManager',
     vif_driver='nova.virt.baremetal.fake.FakeVifDriver',

@@ -17,8 +17,7 @@ from nova.tests.integrated.v3 import api_sample_base
 
 
 class FlavorAccessSampleJsonTests(api_sample_base.ApiSampleTestBaseV3):
-    extension_name = 'os-flavor-access'
-    extra_extensions_to_load = ['flavor-manage']
+    extension_name = 'flavor-access'
 
     def _add_tenant(self):
         subs = {
@@ -40,7 +39,7 @@ class FlavorAccessSampleJsonTests(api_sample_base.ApiSampleTestBaseV3):
                                  "flavor-access-create-req",
                                  subs)
         subs.update(self._get_regexes())
-        self._verify_response("flavor-access-create-resp", subs, response, 200)
+        self._verify_response("flavor-access-create-resp", subs, response, 201)
 
     def test_flavor_access_create(self):
         self._create_flavor()
@@ -54,7 +53,7 @@ class FlavorAccessSampleJsonTests(api_sample_base.ApiSampleTestBaseV3):
         self._create_flavor()
         self._add_tenant()
         flavor_id = 10
-        response = self._do_get('flavors/%s/os-flavor-access' % flavor_id)
+        response = self._do_get('flavors/%s/flavor-access' % flavor_id)
         subs = {
             'flavor_id': flavor_id,
             'tenant_id': 'fake_tenant',

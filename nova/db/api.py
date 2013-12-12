@@ -442,13 +442,13 @@ def migration_get_by_instance_and_status(context, instance_uuid, status):
 
 
 def migration_get_unconfirmed_by_dest_compute(context, confirm_window,
-        dest_compute):
+        dest_compute, use_slave=False):
     """
     Finds all unconfirmed migrations within the confirmation window for
     a specific destination compute host.
     """
     return IMPL.migration_get_unconfirmed_by_dest_compute(context,
-            confirm_window, dest_compute)
+            confirm_window, dest_compute, use_slave=use_slave)
 
 
 def migration_get_in_progress_by_host_and_node(context, host, node):
@@ -584,9 +584,10 @@ def virtual_interface_get_by_uuid(context, vif_uuid):
     return IMPL.virtual_interface_get_by_uuid(context, vif_uuid)
 
 
-def virtual_interface_get_by_instance(context, instance_id):
+def virtual_interface_get_by_instance(context, instance_id, use_slave=False):
     """Gets all virtual_interfaces for instance."""
-    return IMPL.virtual_interface_get_by_instance(context, instance_id)
+    return IMPL.virtual_interface_get_by_instance(context, instance_id,
+                                                  use_slave=use_slave)
 
 
 def virtual_interface_get_by_instance_and_network(context, instance_id,
@@ -1089,21 +1090,6 @@ def quota_usage_update(context, project_id, user_id, resource, **kwargs):
 ###################
 
 
-def reservation_create(context, uuid, usage, project_id, user_id, resource,
-                       delta, expire):
-    """Create a reservation for the given project and resource."""
-    return IMPL.reservation_create(context, uuid, usage, project_id,
-                                   user_id, resource, delta, expire)
-
-
-def reservation_get(context, uuid):
-    """Retrieve a reservation or raise if it does not exist."""
-    return IMPL.reservation_get(context, uuid)
-
-
-###################
-
-
 def quota_reserve(context, resources, quotas, user_quotas, deltas, expire,
                   until_refresh, max_age, project_id=None, user_id=None):
     """Check quotas and create appropriate reservations."""
@@ -1425,9 +1411,9 @@ def console_get(context, console_id, instance_uuid=None):
 
     ##################
 
-def flavor_create(context, values):
+def flavor_create(context, values, projects=None):
     """Create a new instance type."""
-    return IMPL.flavor_create(context, values)
+    return IMPL.flavor_create(context, values, projects=projects)
 
 
 def flavor_get_all(context, inactive=False, filters=None, sort_key='flavorid',

@@ -24,7 +24,8 @@ from nova import exception
 from nova import test
 from nova.tests.virt.xenapi import stubs
 from nova.virt import fake
-from nova.virt.xenapi import driver as xenapi_conn
+from nova.virt.xenapi import agent as xenapi_agent
+from nova.virt.xenapi.client import session as xenapi_session
 from nova.virt.xenapi import fake as xenapi_fake
 from nova.virt.xenapi import vm_utils
 from nova.virt.xenapi import vmops
@@ -38,9 +39,8 @@ class VMOpsTestBase(stubs.XenAPITestBaseNoDB):
 
     def _setup_mock_vmops(self, product_brand=None, product_version=None):
         stubs.stubout_session(self.stubs, xenapi_fake.SessionBase)
-        self._session = xenapi_conn.XenAPISession('test_url', 'root',
-                                                  'test_pass',
-                                                  fake.FakeVirtAPI())
+        self._session = xenapi_session.XenAPISession('test_url', 'root',
+                                                     'test_pass')
         self.vmops = vmops.VMOps(self._session, fake.FakeVirtAPI())
 
     def create_vm(self, name, state="running"):
@@ -82,6 +82,7 @@ class VMOpsTestCase(VMOpsTestBase):
                                                   vm_shutdown=True):
         instance = {'name': 'foo',
                     'task_state': task_states.RESIZE_MIGRATING}
+        context = 'fake_context'
 
         self.mox.StubOutWithMock(vm_utils, 'lookup')
         self.mox.StubOutWithMock(self._vmops, '_destroy')
@@ -106,7 +107,7 @@ class VMOpsTestCase(VMOpsTestBase):
 
         self.mox.ReplayAll()
 
-        self._vmops.finish_revert_migration(instance, [])
+        self._vmops.finish_revert_migration(context, instance, [])
 
     def test_finish_revert_migration_after_crash(self):
         self._test_finish_revert_migration_after_crash(True, True)
@@ -293,7 +294,8 @@ class SpawnTestCase(VMOpsTestBase):
         self.vmops._ensure_instance_name_unique(name_label)
         self.vmops._ensure_enough_free_mem(instance)
         self.vmops._create_vm_record(context, instance, name_label,
-                di_type, kernel_file, ramdisk_file).AndReturn(vm_ref)
+                di_type, kernel_file,
+                ramdisk_file, image_meta).AndReturn(vm_ref)
         step += 1
         self.vmops._update_instance_progress(context, instance, step, steps)
 
@@ -399,7 +401,8 @@ class SpawnTestCase(VMOpsTestBase):
 
         vm_ref = "fake_vm_ref"
         self.vmops._create_vm_record(context, instance, name_label,
-                di_type, kernel_file, ramdisk_file).AndReturn(vm_ref)
+                di_type, kernel_file,
+                ramdisk_file, image_meta).AndReturn(vm_ref)
 
         if resize_instance:
             self.vmops._resize_up_root_vdi(instance, root_vdi)
@@ -552,6 +555,30 @@ class SpawnTestCase(VMOpsTestBase):
         self.mox.ReplayAll()
         self.vmops._attach_orig_disk_for_rescue(instance, vm_ref)
 
+    def test_agent_update_setup(self):
+        # agent updates need to occur after networking is configured
+        instance = {'name': 'betelgeuse',
+                    'uuid': '1-2-3-4-5-6'}
+        vm_ref = 'vm_ref'
+        agent = xenapi_agent.XenAPIBasedAgent(self.vmops._session,
+                self.vmops._virtapi, instance, vm_ref)
+
+        self.mox.StubOutWithMock(xenapi_agent, 'should_use_agent')
+        self.mox.StubOutWithMock(self.vmops, '_get_agent')
+        self.mox.StubOutWithMock(agent, 'get_version')
+        self.mox.StubOutWithMock(agent, 'resetnetwork')
+        self.mox.StubOutWithMock(agent, 'update_if_needed')
+
+        xenapi_agent.should_use_agent(instance).AndReturn(True)
+        self.vmops._get_agent(instance, vm_ref).AndReturn(agent)
+        agent.get_version().AndReturn('1.2.3')
+        agent.resetnetwork()
+        agent.update_if_needed('1.2.3')
+
+        self.mox.ReplayAll()
+        self.vmops._configure_new_instance_with_agent(instance, vm_ref,
+                None, None)
+
 
 @mock.patch.object(vmops.VMOps, '_update_instance_progress')
 @mock.patch.object(vmops.VMOps, '_get_vm_opaque_ref')
@@ -563,10 +590,10 @@ class MigrateDiskAndPowerOffTestCase(VMOpsTestBase):
     def test_migrate_disk_and_power_off_works_down(self,
                 migrate_up, migrate_down, *mocks):
         instance = {"root_gb": 2, "ephemeral_gb": 0, "uuid": "uuid"}
-        ins_type = {"root_gb": 1, "ephemeral_gb": 0}
+        flavor = {"root_gb": 1, "ephemeral_gb": 0}
 
         self.vmops.migrate_disk_and_power_off(None, instance, None,
-                ins_type, None)
+                flavor, None)
 
         self.assertFalse(migrate_up.called)
         self.assertTrue(migrate_down.called)
@@ -574,10 +601,10 @@ class MigrateDiskAndPowerOffTestCase(VMOpsTestBase):
     def test_migrate_disk_and_power_off_works_ephemeral_same_up(self,
                 migrate_up, migrate_down, *mocks):
         instance = {"root_gb": 1, "ephemeral_gb": 1, "uuid": "uuid"}
-        ins_type = {"root_gb": 2, "ephemeral_gb": 1}
+        flavor = {"root_gb": 2, "ephemeral_gb": 1}
 
         self.vmops.migrate_disk_and_power_off(None, instance, None,
-                ins_type, None)
+                flavor, None)
 
         self.assertFalse(migrate_down.called)
         self.assertTrue(migrate_up.called)
@@ -585,20 +612,20 @@ class MigrateDiskAndPowerOffTestCase(VMOpsTestBase):
     def test_migrate_disk_and_power_off_resize_down_ephemeral_fails(self,
                 migrate_up, migrate_down, *mocks):
         instance = {"ephemeral_gb": 2}
-        ins_type = {"ephemeral_gb": 1}
+        flavor = {"ephemeral_gb": 1}
 
         self.assertRaises(exception.ResizeError,
                           self.vmops.migrate_disk_and_power_off,
-                          None, instance, None, ins_type, None)
+                          None, instance, None, flavor, None)
 
     def test_migrate_disk_and_power_off_resize_up_ephemeral_fails(self,
                 migrate_up, migrate_down, *mocks):
         instance = {"ephemeral_gb": 1}
-        ins_type = {"ephemeral_gb": 2}
+        flavor = {"ephemeral_gb": 2}
 
         self.assertRaises(exception.ResizeError,
                           self.vmops.migrate_disk_and_power_off,
-                          None, instance, None, ins_type, None)
+                          None, instance, None, flavor, None)
 
 
 @mock.patch.object(vm_utils, 'migrate_vhd')
@@ -721,3 +748,69 @@ class MigrateDiskResizingUpTestCase(VMOpsTestBase):
         mock_restore.assert_called_once_with(instance)
         mock_migrate_vhd.assert_called_once_with(self.vmops._session,
                 instance, "parent", dest, sr_path, 1)
+
+
+class CreateVMRecordTestCase(VMOpsTestBase):
+    @mock.patch.object(vm_utils, 'determine_vm_mode')
+    @mock.patch.object(vm_utils, 'get_vm_device_id')
+    @mock.patch.object(vm_utils, 'create_vm')
+    def test_create_vm_record_with_vm_device_id(self, mock_create_vm,
+            mock_get_vm_device_id, mock_determine_vm_mode):
+
+        context = "context"
+        instance = {"vm_mode": "vm_mode", "uuid": "uuid123"}
+        name_label = "dummy"
+        disk_image_type = "vhd"
+        kernel_file = "kernel"
+        ramdisk_file = "ram"
+        device_id = "0002"
+        image_properties = {"xenapi_device_id": device_id}
+        image_meta = {"properties": image_properties}
+        session = "session"
+        self.vmops._session = session
+        mock_get_vm_device_id.return_value = device_id
+        mock_determine_vm_mode.return_value = "vm_mode"
+
+        self.vmops._create_vm_record(context, instance, name_label,
+            disk_image_type, kernel_file, ramdisk_file, image_meta)
+
+        mock_get_vm_device_id.assert_called_with(session, image_properties)
+        mock_create_vm.assert_called_with(session, instance, name_label,
+            kernel_file, ramdisk_file, False, device_id)
+
+
+class BootableTestCase(VMOpsTestBase):
+
+    def setUp(self):
+        super(BootableTestCase, self).setUp()
+
+        self.instance = {"name": "test", "uuid": "fake"}
+        vm_rec, self.vm_ref = self.create_vm('test')
+
+        # sanity check bootlock is initially disabled:
+        self.assertEqual({}, vm_rec['blocked_operations'])
+
+    def _get_blocked(self):
+        vm_rec = self._session.call_xenapi("VM.get_record", self.vm_ref)
+        return vm_rec['blocked_operations']
+
+    def test_acquire_bootlock(self):
+        self.vmops._acquire_bootlock(self.vm_ref)
+        blocked = self._get_blocked()
+        self.assertIn('start', blocked)
+
+    def test_release_bootlock(self):
+        self.vmops._acquire_bootlock(self.vm_ref)
+        self.vmops._release_bootlock(self.vm_ref)
+        blocked = self._get_blocked()
+        self.assertNotIn('start', blocked)
+
+    def test_set_bootable(self):
+        self.vmops.set_bootable(self.instance, True)
+        blocked = self._get_blocked()
+        self.assertNotIn('start', blocked)
+
+    def test_set_not_bootable(self):
+        self.vmops.set_bootable(self.instance, False)
+        blocked = self._get_blocked()
+        self.assertIn('start', blocked)

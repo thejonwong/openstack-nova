@@ -29,6 +29,7 @@ import time
 import uuid
 
 from oslo.config import cfg
+import six
 from sqlalchemy import and_
 from sqlalchemy import Boolean
 from sqlalchemy.exc import DataError
@@ -261,7 +262,7 @@ def exact_filter(query, model, filters, legal_keys):
         # OK, filtering on this key; what value do we search for?
         value = filters.pop(key)
 
-        if key == 'metadata' or key == 'system_metadata':
+        if key in ('metadata', 'system_metadata'):
             column_attr = getattr(model, key)
             if isinstance(value, list):
                 for item in value:
@@ -290,7 +291,7 @@ def exact_filter(query, model, filters, legal_keys):
 
 def convert_datetimes(values, *datetime_keys):
     for key in values:
-        if key in datetime_keys and isinstance(values[key], basestring):
+        if key in datetime_keys and isinstance(values[key], six.string_types):
             values[key] = timeutils.parse_strtime(values[key])
     return values
 
@@ -1433,9 +1434,9 @@ def virtual_interface_create(context, values):
     return vif_ref
 
 
-def _virtual_interface_query(context, session=None):
+def _virtual_interface_query(context, session=None, use_slave=False):
     return model_query(context, models.VirtualInterface, session=session,
-                       read_deleted="no")
+                       read_deleted="no", use_slave=use_slave)
 
 
 @require_context
@@ -1481,12 +1482,12 @@ def virtual_interface_get_by_uuid(context, vif_uuid):
 
 @require_context
 @require_instance_exists_using_uuid
-def virtual_interface_get_by_instance(context, instance_uuid):
+def virtual_interface_get_by_instance(context, instance_uuid, use_slave=False):
     """Gets all virtual interfaces for instance.
 
     :param instance_uuid: = uuid of the instance to retrieve vifs for
     """
-    vif_refs = _virtual_interface_query(context).\
+    vif_refs = _virtual_interface_query(context, use_slave=use_slave).\
                        filter_by(instance_uuid=instance_uuid).\
                        all()
     return vif_refs
@@ -1580,7 +1581,7 @@ def _handle_objects_related_type_conversions(values):
     for key in ('created_at', 'deleted_at', 'updated_at',
                 'launched_at', 'terminated_at', 'scheduled_at'):
         if key in values and values[key]:
-            if isinstance(values[key], basestring):
+            if isinstance(values[key], six.string_types):
                 values[key] = timeutils.parse_strtime(values[key])
             values[key] = values[key].replace(tzinfo=None)
 
@@ -1662,22 +1663,23 @@ def instance_destroy(context, instance_uuid, constraint=None):
         else:
             raise exception.InvalidUUID(instance_uuid)
 
-        query = session.query(models.Instance).\
+        query = model_query(context, models.Instance, session=session).\
                         filter_by(uuid=instance_uuid)
         if constraint is not None:
             query = constraint.apply(models.Instance, query)
         count = query.soft_delete()
         if count == 0:
             raise exception.ConstraintNotMet()
-        session.query(models.SecurityGroupInstanceAssociation).\
+        model_query(context, models.SecurityGroupInstanceAssociation,
+                    session=session).\
                 filter_by(instance_uuid=instance_uuid).\
                 soft_delete()
-        session.query(models.InstanceInfoCache).\
-                 filter_by(instance_uuid=instance_uuid).\
-                 soft_delete()
-        session.query(models.InstanceMetadata).\
-                 filter_by(instance_uuid=instance_uuid).\
-                 soft_delete()
+        model_query(context, models.InstanceInfoCache, session=session).\
+                filter_by(instance_uuid=instance_uuid).\
+                soft_delete()
+        model_query(context, models.InstanceMetadata, session=session).\
+                filter_by(instance_uuid=instance_uuid).\
+                soft_delete()
     return instance_ref
 
 
@@ -1873,7 +1875,7 @@ def instance_get_all_by_filters(context, filters, sort_key, sort_dir,
     if 'changes-since' in filters:
         changes_since = timeutils.normalize_time(filters['changes-since'])
         query_prefix = query_prefix.\
-                            filter(models.Instance.updated_at > changes_since)
+                            filter(models.Instance.updated_at >= changes_since)
 
     if 'deleted' in filters:
         # Instances can be soft or hard deleted and the query needs to
@@ -2240,8 +2242,12 @@ def _instance_update(context, instance_uuid, values, copy_old_instance=False,
                 expected = (expected,)
             actual_state = instance_ref["task_state"]
             if actual_state not in expected:
-                raise exception.UnexpectedTaskStateError(actual=actual_state,
-                                                         expected=expected)
+                if actual_state == task_states.DELETING:
+                    raise exception.UnexpectedDeletingTaskStateError(
+                            actual=actual_state, expected=expected)
+                else:
+                    raise exception.UnexpectedTaskStateError(
+                            actual=actual_state, expected=expected)
         if "expected_vm_state" in values:
             expected = values.pop("expected_vm_state")
             if not isinstance(expected, (tuple, list, set)):
@@ -2987,25 +2993,6 @@ def quota_usage_update(context, project_id, user_id, resource, **kwargs):
 
 
 ###################
-
-
-@require_context
-def reservation_get(context, uuid):
-    result = model_query(context, models.Reservation, read_deleted="no").\
-                     filter_by(uuid=uuid).\
-                     first()
-
-    if not result:
-        raise exception.ReservationNotFound(uuid=uuid)
-
-    return result
-
-
-@require_admin_context
-def reservation_create(context, uuid, usage, project_id, user_id, resource,
-                       delta, expire):
-    return _reservation_create(context, uuid, usage, project_id, user_id,
-                               resource, delta, expire)
 
 
 def _reservation_create(context, uuid, usage, project_id, user_id, resource,
@@ -4043,15 +4030,16 @@ def migration_get_by_instance_and_status(context, instance_uuid, status):
 
 @require_admin_context
 def migration_get_unconfirmed_by_dest_compute(context, confirm_window,
-                                              dest_compute):
+                                              dest_compute, use_slave=False):
     confirm_window = (timeutils.utcnow() -
                       datetime.timedelta(seconds=confirm_window))
 
-    return model_query(context, models.Migration, read_deleted="yes").\
-            filter(models.Migration.updated_at <= confirm_window).\
-            filter_by(status="finished").\
-            filter_by(dest_compute=dest_compute).\
-            all()
+    return model_query(context, models.Migration, read_deleted="yes",
+                       use_slave=use_slave).\
+             filter(models.Migration.updated_at <= confirm_window).\
+             filter_by(status="finished").\
+             filter_by(dest_compute=dest_compute).\
+             all()
 
 
 @require_admin_context
@@ -4185,7 +4173,7 @@ def console_get(context, console_id, instance_uuid=None):
 
 
 @require_admin_context
-def flavor_create(context, values):
+def flavor_create(context, values, projects=None):
     """Create a new instance type. In order to pass in extra specs,
     the values dict should contain a 'extra_specs' key/value pair:
 
@@ -4205,14 +4193,24 @@ def flavor_create(context, values):
     instance_type_ref = models.InstanceTypes()
     instance_type_ref.update(values)
 
-    try:
-        instance_type_ref.save()
-    except db_exc.DBDuplicateEntry as e:
-        if 'flavorid' in e.columns:
-            raise exception.InstanceTypeIdExists(flavor_id=values['flavorid'])
-        raise exception.InstanceTypeExists(name=values['name'])
-    except Exception as e:
-        raise db_exc.DBError(e)
+    if projects is None:
+        projects = []
+
+    session = get_session()
+    with session.begin():
+        try:
+            instance_type_ref.save()
+        except db_exc.DBDuplicateEntry as e:
+            if 'flavorid' in e.columns:
+                raise exception.FlavorIdExists(flavor_id=values['flavorid'])
+            raise exception.FlavorExists(name=values['name'])
+        except Exception as e:
+            raise db_exc.DBError(e)
+        for project in set(projects):
+            access_ref = models.InstanceTypeProjects()
+            access_ref.update({"instance_type_id": instance_type_ref.id,
+                               "project_id": project})
+            access_ref.save()
 
     return _dict_with_extra_specs(instance_type_ref)
 
@@ -4236,7 +4234,7 @@ def _dict_with_extra_specs(inst_type_query):
     return inst_type_dict
 
 
-def _instance_type_get_query(context, session=None, read_deleted=None):
+def _flavor_get_query(context, session=None, read_deleted=None):
     query = model_query(context, models.InstanceTypes, session=session,
                        read_deleted=read_deleted).\
                        options(joinedload('extra_specs'))
@@ -4254,11 +4252,11 @@ def flavor_get_all(context, inactive=False, filters=None,
                    sort_key='flavorid', sort_dir='asc', limit=None,
                    marker=None):
     """
-    Returns all instance types.
+    Returns all flavors.
     """
     filters = filters or {}
 
-    # FIXME(sirp): now that we have the `disabled` field for instance-types, we
+    # FIXME(sirp): now that we have the `disabled` field for flavors, we
     # should probably remove the use of `deleted` to mark inactive. `deleted`
     # should mean truly deleted, e.g. we can safely purge the record out of the
     # database.
@@ -4266,7 +4264,7 @@ def flavor_get_all(context, inactive=False, filters=None,
 
     sort_fn = {'desc': desc, 'asc': asc}
 
-    query = _instance_type_get_query(context, read_deleted=read_deleted)
+    query = _flavor_get_query(context, read_deleted=read_deleted)
 
     if 'min_memory_mb' in filters:
         query = query.filter(
@@ -4292,65 +4290,65 @@ def flavor_get_all(context, inactive=False, filters=None,
         else:
             query = query.filter(the_filter[0])
 
+    marker_row = None
     if marker is not None:
-        marker = _instance_type_get_query(context,
-                                          read_deleted=read_deleted).\
+        marker_row = _flavor_get_query(context, read_deleted=read_deleted).\
                     filter_by(flavorid=marker).\
                     first()
-        if not marker:
+        if not marker_row:
             raise exception.MarkerNotFound(marker)
 
     query = sqlalchemyutils.paginate_query(query, models.InstanceTypes, limit,
                                            [sort_key, 'id'],
-                                           marker=marker, sort_dir=sort_dir)
+                                           marker=marker_row,
+                                           sort_dir=sort_dir)
 
     inst_types = query.all()
 
     return [_dict_with_extra_specs(i) for i in inst_types]
 
 
-def _instance_type_get_id_from_flavor_query(context, flavor_id, session=None):
+def _flavor_get_id_from_flavor_query(context, flavor_id, session=None):
     return model_query(context, models.InstanceTypes.id, read_deleted="no",
                        session=session, base_model=models.InstanceTypes).\
                 filter_by(flavorid=flavor_id)
 
 
-def _instance_type_get_id_from_flavor(context, flavor_id, session=None):
-    result = _instance_type_get_id_from_flavor_query(context, flavor_id,
+def _flavor_get_id_from_flavor(context, flavor_id, session=None):
+    result = _flavor_get_id_from_flavor_query(context, flavor_id,
                                                      session=session).\
                     first()
     if not result:
         raise exception.FlavorNotFound(flavor_id=flavor_id)
-    instance_type_id = result[0]
-    return instance_type_id
+    return result[0]
 
 
 @require_context
 def flavor_get(context, id):
-    """Returns a dict describing specific instance_type."""
-    result = _instance_type_get_query(context).\
+    """Returns a dict describing specific flavor."""
+    result = _flavor_get_query(context).\
                         filter_by(id=id).\
                         first()
     if not result:
-        raise exception.InstanceTypeNotFound(instance_type_id=id)
+        raise exception.FlavorNotFound(flavor_id=id)
     return _dict_with_extra_specs(result)
 
 
 @require_context
 def flavor_get_by_name(context, name):
-    """Returns a dict describing specific instance_type."""
-    result = _instance_type_get_query(context).\
+    """Returns a dict describing specific flavor."""
+    result = _flavor_get_query(context).\
                         filter_by(name=name).\
                         first()
     if not result:
-        raise exception.InstanceTypeNotFoundByName(instance_type_name=name)
+        raise exception.FlavorNotFoundByName(flavor_name=name)
     return _dict_with_extra_specs(result)
 
 
 @require_context
 def flavor_get_by_flavor_id(context, flavor_id, read_deleted):
     """Returns a dict describing specific flavor_id."""
-    result = _instance_type_get_query(context, read_deleted=read_deleted).\
+    result = _flavor_get_query(context, read_deleted=read_deleted).\
                         filter_by(flavorid=flavor_id).\
                         first()
     if not result:
@@ -4360,7 +4358,7 @@ def flavor_get_by_flavor_id(context, flavor_id, read_deleted):
 
 @require_admin_context
 def flavor_destroy(context, name):
-    """Marks specific instance_type as deleted."""
+    """Marks specific flavor as deleted."""
     session = get_session()
     with session.begin():
         ref = model_query(context, models.InstanceTypes, session=session,
@@ -4368,7 +4366,7 @@ def flavor_destroy(context, name):
                     filter_by(name=name).\
                     first()
         if not ref:
-            raise exception.InstanceTypeNotFoundByName(instance_type_name=name)
+            raise exception.FlavorNotFoundByName(flavor_name=name)
 
         ref.soft_delete(session=session)
         model_query(context, models.InstanceTypeExtraSpecs,
@@ -4381,7 +4379,7 @@ def flavor_destroy(context, name):
                 soft_delete()
 
 
-def _instance_type_access_query(context, session=None):
+def _flavor_access_query(context, session=None):
     return model_query(context, models.InstanceTypeProjects, session=session,
                        read_deleted="no")
 
@@ -4390,8 +4388,8 @@ def _instance_type_access_query(context, session=None):
 def flavor_access_get_by_flavor_id(context, flavor_id):
     """Get flavor access list by flavor id."""
     instance_type_id_subq = \
-            _instance_type_get_id_from_flavor_query(context, flavor_id)
-    access_refs = _instance_type_access_query(context).\
+            _flavor_get_id_from_flavor_query(context, flavor_id)
+    access_refs = _flavor_access_query(context).\
                         filter_by(instance_type_id=instance_type_id_subq).\
                         all()
     return access_refs
@@ -4400,7 +4398,7 @@ def flavor_access_get_by_flavor_id(context, flavor_id):
 @require_admin_context
 def flavor_access_add(context, flavor_id, project_id):
     """Add given tenant to the flavor access list."""
-    instance_type_id = _instance_type_get_id_from_flavor(context, flavor_id)
+    instance_type_id = _flavor_get_id_from_flavor(context, flavor_id)
 
     access_ref = models.InstanceTypeProjects()
     access_ref.update({"instance_type_id": instance_type_id,
@@ -4416,9 +4414,9 @@ def flavor_access_add(context, flavor_id, project_id):
 @require_admin_context
 def flavor_access_remove(context, flavor_id, project_id):
     """Remove given tenant from the flavor access list."""
-    instance_type_id = _instance_type_get_id_from_flavor(context, flavor_id)
+    instance_type_id = _flavor_get_id_from_flavor(context, flavor_id)
 
-    count = _instance_type_access_query(context).\
+    count = _flavor_access_query(context).\
                     filter_by(instance_type_id=instance_type_id).\
                     filter_by(project_id=project_id).\
                     soft_delete(synchronize_session=False)
@@ -4427,9 +4425,9 @@ def flavor_access_remove(context, flavor_id, project_id):
                                              project_id=project_id)
 
 
-def _instance_type_extra_specs_get_query(context, flavor_id, session=None):
+def _flavor_extra_specs_get_query(context, flavor_id, session=None):
     instance_type_id_subq = \
-            _instance_type_get_id_from_flavor_query(context, flavor_id)
+            _flavor_get_id_from_flavor_query(context, flavor_id)
 
     return model_query(context, models.InstanceTypeExtraSpecs, session=session,
                        read_deleted="no").\
@@ -4438,31 +4436,31 @@ def _instance_type_extra_specs_get_query(context, flavor_id, session=None):
 
 @require_context
 def flavor_extra_specs_get(context, flavor_id):
-    rows = _instance_type_extra_specs_get_query(context, flavor_id).all()
+    rows = _flavor_extra_specs_get_query(context, flavor_id).all()
     return dict([(row['key'], row['value']) for row in rows])
 
 
 @require_context
 def flavor_extra_specs_get_item(context, flavor_id, key):
-    result = _instance_type_extra_specs_get_query(context, flavor_id).\
+    result = _flavor_extra_specs_get_query(context, flavor_id).\
                 filter(models.InstanceTypeExtraSpecs.key == key).\
                 first()
     if not result:
-        raise exception.InstanceTypeExtraSpecsNotFound(
-                extra_specs_key=key, instance_type_id=flavor_id)
+        raise exception.FlavorExtraSpecsNotFound(
+                extra_specs_key=key, flavor_id=flavor_id)
 
     return {result["key"]: result["value"]}
 
 
 @require_context
 def flavor_extra_specs_delete(context, flavor_id, key):
-    result = _instance_type_extra_specs_get_query(context, flavor_id).\
+    result = _flavor_extra_specs_get_query(context, flavor_id).\
                      filter(models.InstanceTypeExtraSpecs.key == key).\
                      soft_delete(synchronize_session=False)
     # did not find the extra spec
     if result == 0:
-        raise exception.InstanceTypeExtraSpecsNotFound(
-                extra_specs_key=key, instance_type_id=flavor_id)
+        raise exception.FlavorExtraSpecsNotFound(
+                extra_specs_key=key, flavor_id=flavor_id)
 
 
 @require_context
@@ -4472,7 +4470,7 @@ def flavor_extra_specs_update_or_create(context, flavor_id, specs,
         try:
             session = get_session()
             with session.begin():
-                instance_type_id = _instance_type_get_id_from_flavor(context,
+                instance_type_id = _flavor_get_id_from_flavor(context,
                                                          flavor_id, session)
 
                 spec_refs = model_query(context, models.InstanceTypeExtraSpecs,

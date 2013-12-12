@@ -550,14 +550,30 @@ class Controller(wsgi.Controller):
                 # No 'changes-since', so we only want non-deleted servers
                 search_opts['deleted'] = False
 
-        if search_opts.get("vm_state") == "deleted":
+        if search_opts.get("vm_state") == ['deleted']:
             if context.is_admin:
                 search_opts['deleted'] = True
             else:
                 msg = _("Only administrators may list deleted instances")
                 raise exc.HTTPBadRequest(explanation=msg)
 
-        if 'all_tenants' not in search_opts:
+        # If all tenants is passed with 0 or false as the value
+        # then remove it from the search options. Nothing passed as
+        # the value for all_tenants is considered to enable the feature
+        all_tenants = search_opts.get('all_tenants')
+        if all_tenants:
+            try:
+                if not strutils.bool_from_string(all_tenants, True):
+                    del search_opts['all_tenants']
+            except ValueError as err:
+                raise exception.InvalidInput(str(err))
+
+        if 'all_tenants' in search_opts:
+            policy.enforce(context, 'compute:get_all_tenants',
+                           {'project_id': context.project_id,
+                            'user_id': context.user_id})
+            del search_opts['all_tenants']
+        else:
             if context.project_id:
                 search_opts['project_id'] = context.project_id
             else:
@@ -949,17 +965,18 @@ class Controller(wsgi.Controller):
             msg = "UnicodeError: %s" % unicode(error)
             raise exc.HTTPBadRequest(explanation=msg)
         except (exception.ImageNotActive,
-                exception.InstanceTypeDiskTooSmall,
-                exception.InstanceTypeMemoryTooSmall,
-                exception.InstanceTypeNotFound,
+                exception.FlavorDiskTooSmall,
+                exception.FlavorMemoryTooSmall,
                 exception.InvalidMetadata,
                 exception.InvalidRequest,
                 exception.MultiplePortsNotApplicable,
+                exception.NetworkNotFound,
                 exception.PortNotFound,
                 exception.SecurityGroupNotFound,
                 exception.InvalidBDM) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
-        except exception.PortInUse as error:
+        except (exception.PortInUse,
+                exception.NoUniqueMatch) as error:
             raise exc.HTTPConflict(explanation=error.format_message())
 
         # If the caller wanted a reservation_id, return it
@@ -1073,7 +1090,7 @@ class Controller(wsgi.Controller):
         except exception.MigrationNotFound:
             msg = _("Instance has not been resized.")
             raise exc.HTTPBadRequest(explanation=msg)
-        except exception.InstanceTypeNotFound:
+        except exception.FlavorNotFound:
             msg = _("Flavor used by the instance could not be found.")
             raise exc.HTTPBadRequest(explanation=msg)
         except exception.InstanceInvalidState as state_error:
@@ -1087,6 +1104,10 @@ class Controller(wsgi.Controller):
     @wsgi.action('reboot')
     def _action_reboot(self, req, id, body):
         if 'reboot' in body and 'type' in body['reboot']:
+            if not isinstance(body['reboot']['type'], six.string_types):
+                msg = _("Argument 'type' for reboot must be a string")
+                LOG.error(msg)
+                raise exc.HTTPBadRequest(explanation=msg)
             valid_reboot_types = ['HARD', 'SOFT']
             reboot_type = body['reboot']['type'].upper()
             if not valid_reboot_types.count(reboot_type):
@@ -1115,6 +1136,10 @@ class Controller(wsgi.Controller):
 
         try:
             self.compute_api.resize(context, instance, flavor_id, **kwargs)
+        except exception.QuotaError as error:
+            raise exc.HTTPRequestEntityTooLarge(
+                explanation=error.format_message(),
+                headers={'Retry-After': 0})
         except exception.FlavorNotFound:
             msg = _("Unable to locate requested flavor.")
             raise exc.HTTPBadRequest(explanation=msg)
@@ -1325,8 +1350,8 @@ class Controller(wsgi.Controller):
             msg = _("Cannot find image for rebuild")
             raise exc.HTTPBadRequest(explanation=msg)
         except (exception.ImageNotActive,
-                exception.InstanceTypeDiskTooSmall,
-                exception.InstanceTypeMemoryTooSmall,
+                exception.FlavorDiskTooSmall,
+                exception.FlavorMemoryTooSmall,
                 exception.InvalidMetadata) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
 

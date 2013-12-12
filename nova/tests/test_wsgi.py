@@ -44,7 +44,15 @@ class TestLoaderNothingExists(test.NoDBTestCase):
         super(TestLoaderNothingExists, self).setUp()
         self.stubs.Set(os.path, 'exists', lambda _: False)
 
-    def test_config_not_found(self):
+    def test_relpath_config_not_found(self):
+        self.flags(api_paste_config='api-paste.ini')
+        self.assertRaises(
+            nova.exception.ConfigNotFound,
+            nova.wsgi.Loader,
+        )
+
+    def test_asbpath_config_not_found(self):
+        self.flags(api_paste_config='/etc/nova/api-paste.ini')
         self.assertRaises(
             nova.exception.ConfigNotFound,
             nova.wsgi.Loader,
@@ -179,7 +187,7 @@ class TestWSGIServerWithSSL(test.NoDBTestCase):
         fake_server = nova.wsgi.Server("fake", test_app,
             host="127.0.0.1", port=0)
         fake_server.start()
-        self.assertNotEquals(0, fake_server.port)
+        self.assertNotEqual(0, fake_server.port)
 
         cli = eventlet.connect(("localhost", fake_ssl_server.port))
         cli = eventlet.wrap_ssl(cli,

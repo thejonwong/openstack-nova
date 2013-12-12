@@ -47,7 +47,9 @@ CONF.register_opts(image_opts)
 
 def qemu_img_info(path):
     """Return an object containing the parsed output from qemu-img info."""
-    if not os.path.exists(path) and CONF.libvirt_images_type != 'rbd':
+    # TODO(mikal): this code should not be referring to a libvirt specific
+    # flag.
+    if not os.path.exists(path) and CONF.libvirt.images_type != 'rbd':
         return imageutils.QemuImgInfo()
 
     out, err = utils.execute('env', 'LC_ALL=C', 'LANG=C',
@@ -107,7 +109,7 @@ def fetch_to_raw(context, image_href, path, user_id, project_id, max_size=0):
             LOG.error(msg % {'base': path,
                              'disk_size': disk_size,
                              'size': max_size})
-            raise exception.InstanceTypeDiskTooSmall()
+            raise exception.FlavorDiskTooSmall()
 
         if fmt != "raw" and CONF.force_raw_images:
             staged = "%s.converted" % path

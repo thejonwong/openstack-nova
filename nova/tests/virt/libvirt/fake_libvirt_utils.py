@@ -17,13 +17,7 @@
 import os
 import StringIO
 
-from oslo.config import cfg
-
 from nova.virt.libvirt import utils as libvirt_utils
-
-
-CONF = cfg.CONF
-CONF.import_opt('instances_path', 'nova.compute.manager')
 
 
 files = {'console.log': True}
@@ -138,15 +132,7 @@ def chown(path, owner):
     pass
 
 
-def create_snapshot(disk_path, snapshot_name):
-    pass
-
-
-def delete_snapshot(disk_path, snapshot_name):
-    pass
-
-
-def extract_snapshot(disk_path, source_fmt, snapshot_name, out_path, dest_fmt):
+def extract_snapshot(disk_path, source_fmt, out_path, dest_fmt):
     files[out_path] = ''
 
 

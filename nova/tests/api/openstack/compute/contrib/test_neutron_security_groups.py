@@ -21,6 +21,7 @@ import uuid
 
 from lxml import etree
 from neutronclient.common import exceptions as n_exc
+from neutronclient.neutron import v2_0 as neutronv20
 from oslo.config import cfg
 import webob
 
@@ -80,8 +81,17 @@ class TestNeutronSecurityGroups(
         neutron = get_client()
         return neutron.create_port(body)
 
+    def _create_security_group(self, **kwargs):
+        body = {'security_group': {}}
+        fields = ['name', 'description']
+        for field in fields:
+            if field in kwargs:
+                body['security_group'][field] = kwargs[field]
+        neutron = get_client()
+        return neutron.create_security_group(body)
+
     def test_create_security_group_with_no_description(self):
-        # Neutron's security group descirption field is optional.
+        # Neutron's security group description field is optional.
         pass
 
     def test_create_security_group_with_blank_name(self):
@@ -93,7 +103,7 @@ class TestNeutronSecurityGroups(
         pass
 
     def test_create_security_group_with_blank_description(self):
-        # Neutron's security group descirption field is optional.
+        # Neutron's security group description field is optional.
         pass
 
     def test_create_security_group_with_whitespace_description(self):
@@ -164,6 +174,7 @@ class TestNeutronSecurityGroups(
         self._create_network()
         fake_instance = {'project_id': 'fake_tenant',
                          'availability_zone': 'zone_one',
+                         'info_cache': {'network_info': []},
                          'security_groups': [],
                          'uuid': str(uuid.uuid4()),
                          'display_name': 'test_instance'}
@@ -202,6 +213,24 @@ class TestNeutronSecurityGroups(
 
         req = fakes.HTTPRequest.blank('/v2/fake/servers/1/action')
         self.manager._addSecurityGroup(req, '1', body)
+
+    def test_associate_duplicate_names(self):
+        sg1 = self._create_security_group(name='sg1',
+                                          description='sg1')['security_group']
+        self._create_security_group(name='sg1',
+                                    description='sg1')['security_group']
+        net = self._create_network()
+        self._create_port(
+            network_id=net['network']['id'], security_groups=[sg1['id']],
+            device_id=test_security_groups.FAKE_UUID1)
+
+        self.stubs.Set(nova.db, 'instance_get',
+                       test_security_groups.return_server)
+        body = dict(addSecurityGroup=dict(name="sg1"))
+
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/1/action')
+        self.assertRaises(webob.exc.HTTPConflict,
+                          self.manager._addSecurityGroup, req, '1', body)
 
     def test_associate_port_security_enabled_true(self):
         sg = self._create_sg_template().get('security_group')
@@ -269,7 +298,21 @@ class TestNeutronSecurityGroups(
         req = fakes.HTTPRequest.blank('/v2/fake/servers/1/action')
         self.manager._removeSecurityGroup(req, '1', body)
 
+    def test_get_raises_no_unique_match_error(self):
+
+        def fake_find_resourceid_by_name_or_id(client, param, name):
+
+            raise n_exc.NeutronClientNoUniqueMatch()
+
+        self.stubs.Set(neutronv20, 'find_resourceid_by_name_or_id',
+                       fake_find_resourceid_by_name_or_id)
+        security_group_api = self.controller.security_group_api
+        self.assertRaises(exception.NoUniqueMatch, security_group_api.get,
+                          context.get_admin_context(), 'foobar')
+
     def test_get_instances_security_groups_bindings(self):
+        servers = [{'id': test_security_groups.FAKE_UUID1},
+                   {'id': test_security_groups.FAKE_UUID2}]
         sg1 = self._create_sg_template(name='test1').get('security_group')
         sg2 = self._create_sg_template(name='test2').get('security_group')
         # test name='' is replaced with id
@@ -290,7 +333,7 @@ class TestNeutronSecurityGroups(
         security_group_api = self.controller.security_group_api
         bindings = (
             security_group_api.get_instances_security_groups_bindings(
-                context.get_admin_context()))
+                context.get_admin_context(), servers))
         self.assertEqual(bindings, expected)
 
     def test_get_instance_security_groups(self):
@@ -763,7 +806,7 @@ class MockClient(object):
         device_id = _params.get('device_id')
         for port in self._fake_ports.values():
             if device_id:
-                if device_id == port['device_id']:
+                if port['device_id'] in device_id:
                     ret.append(port)
             else:
                 ret.append(port)

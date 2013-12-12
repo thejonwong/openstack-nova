@@ -13,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import base64
 import uuid
 
 import mox
@@ -124,6 +123,13 @@ class ServerActionsControllerTest(test.TestCase):
                           self.controller._action_reboot,
                           req, FAKE_UUID, body)
 
+    def test_reboot_none(self):
+        body = dict(reboot=dict(type=None))
+        req = fakes.HTTPRequest.blank(self.url)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller._action_reboot,
+                          req, FAKE_UUID, body)
+
     def test_reboot_not_found(self):
         self.stubs.Set(db, 'instance_get_by_uuid',
                        return_server_not_found)
@@ -194,7 +200,7 @@ class ServerActionsControllerTest(test.TestCase):
         body = robj.obj
 
         self.assertEqual(body['server']['image']['id'], '2')
-        self.assertEqual(len(body['server']['admin_pass']),
+        self.assertEqual(len(body['server']['admin_password']),
                          CONF.password_length)
 
         self.assertEqual(robj['location'], self_href)
@@ -246,7 +252,7 @@ class ServerActionsControllerTest(test.TestCase):
         self.assertEqual(info['image_href_in_call'], image_uuid)
 
     def test_rebuild_accepted_minimum_pass_disabled(self):
-        # run with enable_instance_password disabled to verify admin_pass
+        # run with enable_instance_password disabled to verify admin_password
         # is missing from response. See lp bug 921814
         self.flags(enable_instance_password=False)
 
@@ -266,7 +272,7 @@ class ServerActionsControllerTest(test.TestCase):
         body = robj.obj
 
         self.assertEqual(body['server']['image']['id'], '2')
-        self.assertNotIn("admin_pass", body['server'])
+        self.assertNotIn("admin_password", body['server'])
 
         self.assertEqual(robj['location'], self_href)
 
@@ -348,23 +354,7 @@ class ServerActionsControllerTest(test.TestCase):
                           self.controller._action_rebuild,
                           req, FAKE_UUID, body)
 
-    def test_rebuild_personality(self):
-        body = {
-            "rebuild": {
-                "image_ref": self._image_href,
-                "personality": [{
-                    "path": "/path/to/file",
-                    "contents": base64.b64encode("Test String"),
-                }]
-            },
-        }
-
-        req = fakes.HTTPRequestV3.blank(self.url)
-        body = self.controller._action_rebuild(req, FAKE_UUID, body).obj
-
-        self.assertNotIn('personality', body['server'])
-
-    def test_rebuild_admin_pass(self):
+    def test_rebuild_admin_password(self):
         return_server = fakes.fake_instance_get(image_ref='2',
                 vm_state=vm_states.ACTIVE, host='fake_host')
         self.stubs.Set(db, 'instance_get_by_uuid', return_server)
@@ -372,7 +362,7 @@ class ServerActionsControllerTest(test.TestCase):
         body = {
             "rebuild": {
                 "image_ref": self._image_href,
-                "admin_pass": "asdf",
+                "admin_password": "asdf",
             },
         }
 
@@ -380,10 +370,10 @@ class ServerActionsControllerTest(test.TestCase):
         body = self.controller._action_rebuild(req, FAKE_UUID, body).obj
 
         self.assertEqual(body['server']['image']['id'], '2')
-        self.assertEqual(body['server']['admin_pass'], 'asdf')
+        self.assertEqual(body['server']['admin_password'], 'asdf')
 
-    def test_rebuild_admin_pass_pass_disabled(self):
-        # run with enable_instance_password disabled to verify admin_pass
+    def test_rebuild_admin_password_pass_disabled(self):
+        # run with enable_instance_password disabled to verify admin_password
         # is missing from response. See lp bug 921814
         self.flags(enable_instance_password=False)
 
@@ -394,7 +384,7 @@ class ServerActionsControllerTest(test.TestCase):
         body = {
             "rebuild": {
                 "image_ref": self._image_href,
-                "admin_pass": "asdf",
+                "admin_password": "asdf",
             },
         }
 
@@ -402,7 +392,7 @@ class ServerActionsControllerTest(test.TestCase):
         body = self.controller._action_rebuild(req, FAKE_UUID, body).obj
 
         self.assertEqual(body['server']['image']['id'], '2')
-        self.assertNotIn('admin_pass', body['server'])
+        self.assertNotIn('admin_password', body['server'])
 
     def test_rebuild_server_not_found(self):
         def server_not_found(self, instance_id,
@@ -577,7 +567,7 @@ class ServerActionsControllerTest(test.TestCase):
         self.stubs.Set(compute_api.API, 'resize', fake_resize)
 
         req = fakes.HTTPRequestV3.blank(self.url)
-        self.assertRaises(exception.TooManyInstances,
+        self.assertRaises(webob.exc.HTTPRequestEntityTooLarge,
                           self.controller._action_resize,
                           req, FAKE_UUID, body)
 
@@ -1081,9 +1071,6 @@ class TestServerActionXMLDeserializer(test.TestCase):
                     <metadata>
                         <meta key="My Server Name">Apache1</meta>
                     </metadata>
-                    <personality>
-                        <file path="/etc/banner.txt">Mg==</file>
-                    </personality>
                 </rebuild>"""
         request = self.deserializer.deserialize(serial_request, 'action')
         expected = {
@@ -1093,9 +1080,6 @@ class TestServerActionXMLDeserializer(test.TestCase):
                 "metadata": {
                     "My Server Name": "Apache1",
                 },
-                "personality": [
-                    {"path": "/etc/banner.txt", "contents": "Mg=="},
-                ],
             },
         }
         self.assertThat(request['body'], matchers.DictMatches(expected))
@@ -1121,9 +1105,6 @@ class TestServerActionXMLDeserializer(test.TestCase):
                     <metadata>
                         <meta key="My Server Name">Apache1</meta>
                     </metadata>
-                    <personality>
-                        <file path="/etc/banner.txt">Mg==</file>
-                    </personality>
                 </rebuild>"""
         self.assertRaises(AttributeError,
                           self.deserializer.deserialize,

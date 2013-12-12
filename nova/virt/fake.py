@@ -34,6 +34,7 @@ from nova import db
 from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
+from nova import utils
 from nova.virt import driver
 from nova.virt import virtapi
 
@@ -98,7 +99,7 @@ class FakeDriver(driver.ComputeDriver):
           'memory_mb_used': 0,
           'local_gb_used': 100000000000,
           'hypervisor_type': 'fake',
-          'hypervisor_version': '1.0',
+          'hypervisor_version': utils.convert_version_to_int('1.0'),
           'hypervisor_hostname': CONF.host,
           'cpu_info': {},
           'disk_available_least': 500000000000,
@@ -163,11 +164,11 @@ class FakeDriver(driver.ComputeDriver):
         pass
 
     def migrate_disk_and_power_off(self, context, instance, dest,
-                                   instance_type, network_info,
+                                   flavor, network_info,
                                    block_device_info=None):
         pass
 
-    def finish_revert_migration(self, instance, network_info,
+    def finish_revert_migration(self, context, instance, network_info,
                                 block_device_info=None, power_on=True):
         pass
 
@@ -198,7 +199,7 @@ class FakeDriver(driver.ComputeDriver):
     def suspend(self, instance):
         pass
 
-    def resume(self, instance, network_info, block_device_info=None):
+    def resume(self, context, instance, network_info, block_device_info=None):
         pass
 
     def destroy(self, context, instance, network_info, block_device_info=None,
@@ -291,6 +292,14 @@ class FakeDriver(driver.ComputeDriver):
         volusage = []
         return volusage
 
+    def get_host_cpu_stats(self):
+        stats = {'kernel': 5664160000000L,
+                'idle': 1592705190000000L,
+                'user': 26728850000000L,
+                'iowait': 6121490000000L}
+        stats['frequency'] = 800
+        return stats
+
     def block_stats(self, instance_name, disk_id):
         return [0L, 0L, 0L, 0L, None]
 
@@ -305,7 +314,7 @@ class FakeDriver(driver.ComputeDriver):
                 'host': 'fakevncconsole.com',
                 'port': 6969}
 
-    def get_spice_console(self, instance):
+    def get_spice_console(self, context, instance):
         return {'internal_access_path': 'FAKE',
                 'host': 'fakespiceconsole.com',
                 'port': 6969,
@@ -459,8 +468,8 @@ class FakeVirtAPI(virtapi.VirtAPI):
         return db.agent_build_get_by_triple(context,
                                             hypervisor, os, architecture)
 
-    def instance_type_get(self, context, instance_type_id):
-        return db.flavor_get(context, instance_type_id)
+    def flavor_get(self, context, flavor_id):
+        return db.flavor_get(context, flavor_id)
 
     def block_device_mapping_get_all_by_instance(self, context, instance,
                                                  legacy=True):

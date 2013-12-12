@@ -92,7 +92,7 @@ class FlavorManageTest(test.NoDBTestCase):
         self.app = fakes.wsgi_app_v3(init_only=('servers', 'flavors',
                                                 'flavor-manage',
                                                 'os-flavor-rxtx',
-                                                'os-flavor-access'))
+                                                'flavor-access'))
 
         self.expected_flavor = {
             "flavor": {
@@ -104,7 +104,7 @@ class FlavorManageTest(test.NoDBTestCase):
                 "id": unicode('1234'),
                 "swap": 512,
                 "rxtx_factor": 1,
-                "os-flavor-access:is_public": True,
+                "flavor-access:is_public": True,
             }
         }
 
@@ -180,13 +180,13 @@ class FlavorManageTest(test.NoDBTestCase):
                 "id": 1235,
                 "swap": 512,
                 "rxtx_factor": 1,
-                "os-flavor-access:is_public": True,
+                "flavor-access:is_public": True,
             }
         }
 
         def fake_create(name, memory_mb, vcpus, root_gb, ephemeral_gb,
                         flavorid, swap, rxtx_factor, is_public):
-            raise exception.InstanceTypeExists(name=name)
+            raise exception.FlavorExists(name=name)
 
         self.stubs.Set(flavors, "create", fake_create)
         url = '/v3/flavors'
@@ -256,7 +256,7 @@ class FlavorManageTest(test.NoDBTestCase):
         req.method = 'POST'
         req.body = jsonutils.dumps(request_dict)
         res = req.get_response(self.app)
-        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.status_code, 201)
         body = jsonutils.loads(res.body)
         self.assertEqual("test", body["flavor"]["name"])
 
@@ -288,7 +288,7 @@ class PrivateFlavorManageTest(test.TestCase):
                 "OS-FLV-EXT-DATA:ephemeral": 1,
                 "swap": 512,
                 "rxtx_factor": 1,
-                "os-flavor-access:is_public": False
+                "flavor-access:is_public": False
             }
         }
         expected = {
@@ -326,7 +326,7 @@ class PrivateFlavorManageTest(test.TestCase):
                 "OS-FLV-EXT-DATA:ephemeral": 1,
                 "swap": 512,
                 "rxtx_factor": 1,
-                "os-flavor-access:is_public": True
+                "flavor-access:is_public": True
             }
         }
         expected = {

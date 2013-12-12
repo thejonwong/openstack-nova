@@ -27,7 +27,6 @@ import os
 import time
 import urllib
 import urllib2
-import uuid
 
 from oslo.config import cfg
 
@@ -41,11 +40,13 @@ from nova.openstack.common import excutils
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import strutils
+from nova.openstack.common import uuidutils
 from nova import unit
 from nova import utils
 from nova.virt import configdrive
 from nova.virt import driver
 from nova.virt.vmwareapi import vif as vmwarevif
+from nova.virt.vmwareapi import vim
 from nova.virt.vmwareapi import vim_util
 from nova.virt.vmwareapi import vm_util
 from nova.virt.vmwareapi import vmware_images
@@ -63,7 +64,7 @@ vmware_group = cfg.OptGroup(name='vmware',
 CONF = cfg.CONF
 CONF.register_group(vmware_group)
 CONF.register_opts(vmware_vif_opts, vmware_group)
-CONF.import_opt('base_dir_name', 'nova.virt.libvirt.imagecache')
+CONF.import_opt('image_cache_subdirectory_name', 'nova.compute.manager')
 CONF.import_opt('vnc_enabled', 'nova.vnc')
 
 LOG = logging.getLogger(__name__)
@@ -91,7 +92,8 @@ class VMwareVMOps(object):
         self._volumeops = volumeops
         self._cluster = cluster
         self._datastore_regex = datastore_regex
-        self._instance_path_base = VMWARE_PREFIX + CONF.base_dir_name
+        self._instance_path_base = (VMWARE_PREFIX +
+                                    CONF.image_cache_subdirectory_name)
         self._default_root_device = 'vda'
         self._rescue_suffix = '-rescue'
         self._poll_rescue_last_ran = None
@@ -128,8 +130,7 @@ class VMwareVMOps(object):
         LOG.debug(_("Got total of %s instances") % str(len(lst_vm_names)))
         return lst_vm_names
 
-    def _extend_virtual_disk(self, instance, requested_size, name,
-                             datacenter):
+    def _extend_virtual_disk(self, instance, requested_size, name, dc_ref):
         service_content = self._session._get_vim().get_service_content()
         LOG.debug(_("Extending root virtual disk to %s"), requested_size)
         vmdk_extend_task = self._session._call_method(
@@ -137,12 +138,36 @@ class VMwareVMOps(object):
                 "ExtendVirtualDisk_Task",
                 service_content.virtualDiskManager,
                 name=name,
-                datacenter=datacenter,
+                datacenter=dc_ref,
                 newCapacityKb=requested_size,
                 eagerZero=False)
-        self._session._wait_for_task(instance['uuid'],
-                                     vmdk_extend_task)
+        try:
+            self._session._wait_for_task(instance['uuid'],
+                                         vmdk_extend_task)
+        except Exception as e:
+            with excutils.save_and_reraise_exception():
+                LOG.error(_('Extending virtual disk failed with error: %s'),
+                          e, instance=instance)
+                # Clean up files created during the extend operation
+                files = [name.replace(".vmdk", "-flat.vmdk"), name]
+                for file in files:
+                    self._delete_datastore_file(instance, file, dc_ref)
+
         LOG.debug(_("Extended root virtual disk"))
+
+    def _delete_datastore_file(self, instance, datastore_path, dc_ref):
+        LOG.debug(_("Deleting the datastore file %s") % datastore_path,
+                  instance=instance)
+        vim = self._session._get_vim()
+        file_delete_task = self._session._call_method(
+                self._session._get_vim(),
+                "DeleteDatastoreFile_Task",
+                vim.get_service_content().fileManager,
+                name=datastore_path,
+                datacenter=dc_ref)
+        self._session._wait_for_task(instance['uuid'],
+                                     file_delete_task)
+        LOG.debug(_("Deleted the datastore file"), instance=instance)
 
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info, block_device_info=None):
@@ -321,27 +346,6 @@ class VMwareVMOps(object):
                          "data_store_name": data_store_name},
                       instance=instance)
 
-        def _delete_disk_file(vmdk_path):
-            LOG.debug(_("Deleting the file %(vmdk_path)s "
-                        "on the ESX host local"
-                        "store %(data_store_name)s") %
-                        {"vmdk_path": vmdk_path,
-                         "data_store_name": data_store_name},
-                      instance=instance)
-            # Delete the vmdk file.
-            vmdk_delete_task = self._session._call_method(
-                        self._session._get_vim(),
-                        "DeleteDatastoreFile_Task",
-                        service_content.fileManager,
-                        name=vmdk_path,
-                        datacenter=dc_ref)
-            self._session._wait_for_task(instance['uuid'], vmdk_delete_task)
-            LOG.debug(_("Deleted the file %(vmdk_path)s on the "
-                        "ESX host local store %(data_store_name)s") %
-                        {"vmdk_path": vmdk_path,
-                         "data_store_name": data_store_name},
-                      instance=instance)
-
         def _fetch_image_on_esx_datastore():
             """Fetch image from Glance to ESX datastore."""
             LOG.debug(_("Downloading image file data %(image_ref)s to the ESX "
@@ -449,7 +453,9 @@ class VMwareVMOps(object):
                 if disk_type != "sparse":
                    # Create a flat virtual disk and retain the metadata file.
                     _create_virtual_disk()
-                    _delete_disk_file(flat_uploaded_vmdk_path)
+                    self._delete_datastore_file(instance,
+                                                flat_uploaded_vmdk_path,
+                                                dc_ref)
 
                 _fetch_image_on_esx_datastore()
 
@@ -458,7 +464,9 @@ class VMwareVMOps(object):
                     disk_type = "thin"
                     _copy_virtual_disk(sparse_uploaded_vmdk_path,
                                        uploaded_vmdk_path)
-                    _delete_disk_file(sparse_uploaded_vmdk_path)
+                    self._delete_datastore_file(instance,
+                                                sparse_uploaded_vmdk_path,
+                                                dc_ref)
             else:
                 # linked clone base disk exists
                 if disk_type == "sparse":
@@ -745,9 +753,11 @@ class VMwareVMOps(object):
         # Generate a random vmdk file name to which the coalesced vmdk content
         # will be copied to. A random name is chosen so that we don't have
         # name clashes.
-        random_name = str(uuid.uuid4())
-        dest_vmdk_file_location = vm_util.build_datastore_path(datastore_name,
+        random_name = uuidutils.generate_uuid()
+        dest_vmdk_file_path = vm_util.build_datastore_path(datastore_name,
                    "vmware-tmp/%s.vmdk" % random_name)
+        dest_vmdk_data_file_path = vm_util.build_datastore_path(datastore_name,
+                   "vmware-tmp/%s-flat.vmdk" % random_name)
         dc_ref = self._get_datacenter_ref_and_name()[0]
 
         def _copy_vmdk_content():
@@ -764,7 +774,7 @@ class VMwareVMOps(object):
                 service_content.virtualDiskManager,
                 sourceName=vmdk_file_path_before_snapshot,
                 sourceDatacenter=dc_ref,
-                destName=dest_vmdk_file_location,
+                destName=dest_vmdk_file_path,
                 destDatacenter=dc_ref,
                 destSpec=copy_spec,
                 force=False)
@@ -785,6 +795,7 @@ class VMwareVMOps(object):
                 image_id,
                 instance,
                 os_type=os_type,
+                disk_type="preallocated",
                 adapter_type=adapter_type,
                 image_version=1,
                 host=self._session._host_ip,
@@ -804,18 +815,13 @@ class VMwareVMOps(object):
             Delete temporary vmdk files generated in image handling
             operations.
             """
-            # Delete the temporary vmdk created above.
-            LOG.debug(_("Deleting temporary vmdk file %s")
-                        % dest_vmdk_file_location, instance=instance)
-            remove_disk_task = self._session._call_method(
-                self._session._get_vim(),
-                "DeleteVirtualDisk_Task",
-                service_content.virtualDiskManager,
-                name=dest_vmdk_file_location,
-                datacenter=dc_ref)
-            self._session._wait_for_task(instance['uuid'], remove_disk_task)
-            LOG.debug(_("Deleted temporary vmdk file %s")
-                        % dest_vmdk_file_location, instance=instance)
+            # The data file is the one occupying space, and likelier to see
+            # deletion problems, so prioritize its deletion first. In the
+            # unlikely event that its deletion fails, the small descriptor file
+            # is retained too by design since it makes little sense to remove
+            # it when the data disk it refers to still lingers.
+            for f in dest_vmdk_data_file_path, dest_vmdk_file_path:
+                self._delete_datastore_file(instance, f, dc_ref)
 
         _clean_temp_data()
 
@@ -1120,7 +1126,7 @@ class VMwareVMOps(object):
                                       {'progress': progress})
 
     def migrate_disk_and_power_off(self, context, instance, dest,
-                                   instance_type):
+                                   flavor):
         """
         Transfers the disk of a running instance in multiple phases, turning
         off the instance before the end.
@@ -1199,7 +1205,7 @@ class VMwareVMOps(object):
             LOG.warn(_("In vmwareapi:vmops:confirm_migration, got this "
                      "exception while destroying the VM: %s") % str(excep))
 
-    def finish_revert_migration(self, instance, network_info,
+    def finish_revert_migration(self, context, instance, network_info,
                                 block_device_info, power_on=True):
         """Finish reverting a resize."""
         # The original vm was suffixed with '-orig'; find it using
@@ -1300,10 +1306,36 @@ class VMwareVMOps(object):
                 'num_cpu': int(query['summary.config.numCpu']),
                 'cpu_time': 0}
 
+    def _get_diagnostic_from_object_properties(self, props, wanted_props):
+        diagnostics = {}
+        while props:
+            for elem in props.objects:
+                for prop in elem.propSet:
+                    if prop.name in wanted_props:
+                        prop_dict = vim.object_to_dict(prop.val, list_depth=1)
+                        diagnostics.update(prop_dict)
+            token = vm_util._get_token(props)
+            if not token:
+                break
+
+            props = self._session._call_method(vim_util,
+                                               "continue_to_get_objects",
+                                               token)
+        return diagnostics
+
     def get_diagnostics(self, instance):
         """Return data about VM diagnostics."""
-        msg = _("get_diagnostics not implemented for vmwareapi")
-        raise NotImplementedError(msg)
+        vm_ref = vm_util.get_vm_ref(self._session, instance)
+        lst_properties = ["summary.config",
+                          "summary.quickStats",
+                          "summary.runtime"]
+        vm_props = self._session._call_method(vim_util,
+                    "get_object_properties", None, vm_ref, "VirtualMachine",
+                    lst_properties)
+        data = self._get_diagnostic_from_object_properties(vm_props,
+                                                           set(lst_properties))
+        # Add a namespace to all of the diagnostsics
+        return dict([('vmware:' + k, v) for k, v in data.items()])
 
     def get_console_output(self, instance):
         """Return snapshot of console."""

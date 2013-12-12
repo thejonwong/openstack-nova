@@ -316,7 +316,6 @@ class ServersControllerCreateTest(test.TestCase):
                 'flavor_ref': flavor_ref,
                 'metadata': {'hello': 'world',
                              'open': 'stack'},
-                'personality': []
             }
         }
 
@@ -327,7 +326,7 @@ class ServersControllerCreateTest(test.TestCase):
         res = self.controller.create(req, body).obj
 
         self.assertEqual(FAKE_UUID, res["server"]["id"])
-        self._check_admin_pass_len(res["server"])
+        self._check_admin_password_len(res["server"])
 
     def test_create_multiple_instances_pass_disabled(self):
         """Test creating multiple instances but not asking for
@@ -344,7 +343,6 @@ class ServersControllerCreateTest(test.TestCase):
                 'flavor_ref': flavor_ref,
                 'metadata': {'hello': 'world',
                              'open': 'stack'},
-                'personality': []
             }
         }
 
@@ -355,16 +353,16 @@ class ServersControllerCreateTest(test.TestCase):
         res = self.controller.create(req, body).obj
 
         self.assertEqual(FAKE_UUID, res["server"]["id"])
-        self._check_admin_pass_missing(res["server"])
+        self._check_admin_password_missing(res["server"])
 
-    def _check_admin_pass_len(self, server_dict):
-        """utility function - check server_dict for admin_pass length."""
+    def _check_admin_password_len(self, server_dict):
+        """utility function - check server_dict for admin_password length."""
         self.assertEqual(CONF.password_length,
-                         len(server_dict["admin_pass"]))
+                         len(server_dict["admin_password"]))
 
-    def _check_admin_pass_missing(self, server_dict):
-        """utility function - check server_dict for absence of adminPass."""
-        self.assertNotIn("admin_pass", server_dict)
+    def _check_admin_password_missing(self, server_dict):
+        """utility function - check server_dict for admin_password absence."""
+        self.assertNotIn("admin_password", server_dict)
 
     def test_create_multiple_instances_resv_id_return(self):
         """Test creating multiple instances with asking for
@@ -380,7 +378,6 @@ class ServersControllerCreateTest(test.TestCase):
                 'flavor_ref': flavor_ref,
                 'metadata': {'hello': 'world',
                              'open': 'stack'},
-                'personality': [],
                 multiple_create.RRID_ATTRIBUTE_NAME: True
             }
         }
@@ -453,7 +450,6 @@ class ServersControllerCreateTest(test.TestCase):
                 'flavor_ref': flavor_ref,
                 'metadata': {'hello': 'world',
                              'open': 'stack'},
-                'personality': []
             }
         }
 
@@ -475,7 +471,6 @@ class ServersControllerCreateTest(test.TestCase):
                 'flavor_ref': flavor_ref,
                 'metadata': {'hello': 'world',
                              'open': 'stack'},
-                'personality': []
             }
         }
 

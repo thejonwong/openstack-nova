@@ -86,10 +86,7 @@ neutron_opts = [
     cfg.StrOpt('neutron_ca_certificates_file',
                 help='Location of ca certificates file to use for '
                      'neutron client requests.'),
-    cfg.BoolOpt('dhcp_options_enabled',
-                default=False,
-                help='Use per-port DHCP options with Neutron'),
-    ]
+   ]
 
 CONF = cfg.CONF
 CONF.register_opts(neutron_opts)
@@ -191,7 +188,6 @@ class API(base.Base):
                 raise exception.PortLimitExceeded()
             raise
 
-    @refresh_cache
     def allocate_for_instance(self, context, instance, **kwargs):
         """Allocate network resources for the instance.
 
@@ -228,10 +224,7 @@ class API(base.Base):
             raise exception.InvalidInput(
                 reason=msg % instance['display_name'])
         requested_networks = kwargs.get('requested_networks')
-        # Note: (dkehn) this option check should be removed as soon as support
-        # in neutron released, see https://bugs.launchpad.net/nova/+bug/1214162
-        if CONF.dhcp_options_enabled:
-            dhcp_opts = kwargs.get('dhcp_options', None)
+        dhcp_opts = kwargs.get('dhcp_options', None)
         ports = {}
         fixed_ips = {}
         net_ids = []
@@ -357,7 +350,7 @@ class API(base.Base):
                             msg = _("Failed to delete port %s")
                             LOG.exception(msg, port_id)
 
-        nw_info = self._get_instance_nw_info(context, instance, networks=nets)
+        nw_info = self.get_instance_nw_info(context, instance, networks=nets)
         # NOTE(danms): Only return info about ports we created in this run.
         # In the initial allocation case, this will be everything we created,
         # and in later runs will only be what was created that time. Thus,
@@ -372,7 +365,8 @@ class API(base.Base):
         if (not self.last_neutron_extension_sync or
             ((time.time() - self.last_neutron_extension_sync)
              >= CONF.neutron_extension_sync_interval)):
-            neutron = neutronv2.get_client(context.get_admin_context())
+            neutron = neutronv2.get_client(context.get_admin_context(),
+                                           admin=True)
             extensions_list = neutron.list_extensions()['extensions']
             self.last_neutron_extension_sync = time.time()
             self.extensions.clear()
@@ -416,14 +410,12 @@ class API(base.Base):
                 LOG.exception(_("Failed to delete neutron port %(portid)s")
                               % {'portid': port})
 
-    @refresh_cache
     def allocate_port_for_instance(self, context, instance, port_id,
                                    network_id=None, requested_ip=None):
         """Allocate a port for the instance."""
         return self.allocate_for_instance(context, instance,
                 requested_networks=[(network_id, requested_ip, port_id)])
 
-    @refresh_cache
     def deallocate_port_for_instance(self, context, instance, port_id):
         """Remove a specified port from the instance.
 
@@ -435,7 +427,7 @@ class API(base.Base):
             LOG.exception(_("Failed to delete neutron port %s") %
                           port_id)
 
-        return self._get_instance_nw_info(context, instance)
+        return self.get_instance_nw_info(context, instance)
 
     def list_ports(self, context, **search_opts):
         """List ports for the client based on search options."""
@@ -445,18 +437,22 @@ class API(base.Base):
         """Return the port for the client given the port id."""
         return neutronv2.get_client(context).show_port(port_id)
 
-    def get_instance_nw_info(self, context, instance, networks=None):
+    @refresh_cache
+    def get_instance_nw_info(self, context, instance, networks=None,
+                             use_slave=False):
         """Return network information for specified instance
            and update cache.
         """
+        # NOTE(geekinutah): It would be nice if use_slave had us call
+        #                   special APIs that pummeled slaves instead of
+        #                   the master. For now we just ignore this arg.
         result = self._get_instance_nw_info(context, instance, networks)
-        update_instance_info_cache(self, context, instance, result,
-                                   update_cells=False)
         return result
 
     def _get_instance_nw_info(self, context, instance, networks=None):
-        LOG.debug(_('get_instance_nw_info() for %s'),
-                  instance['display_name'])
+        # keep this caching-free version of the get_instance_nw_info method
+        # because it is used by the caching logic itself.
+        LOG.debug(_('get_instance_nw_info() for %s'), instance['display_name'])
         nw_info = self._build_network_info_model(context, instance, networks)
         return network_model.NetworkInfo.hydrate(nw_info)
 
@@ -973,11 +969,15 @@ class API(base.Base):
         return network, ovs_interfaceid
 
     def _build_network_info_model(self, context, instance, networks=None):
+        # Note(arosen): on interface-attach networks only contains the
+        # network that the interface is being attached to.
+
         search_opts = {'tenant_id': instance['project_id'],
                        'device_id': instance['uuid'], }
         client = neutronv2.get_client(context, admin=True)
         data = client.list_ports(**search_opts)
         ports = data.get('ports', [])
+        nw_info = network_model.NetworkInfo()
         if networks is None:
             # retrieve networks from info_cache to get correct nic order
             network_cache = self.conductor_api.instance_get_by_uuid(
@@ -990,12 +990,31 @@ class API(base.Base):
         # ensure ports are in preferred network order, and filter out
         # those not attached to one of the provided list of networks
         else:
+
+            # Unfortunately, this is sometimes in unicode and sometimes not
+            if isinstance(instance['info_cache']['network_info'], unicode):
+                ifaces = jsonutils.loads(
+                    instance['info_cache']['network_info'])
+            else:
+                ifaces = instance['info_cache']['network_info']
+
+            # Include existing interfaces so they are not removed from the db.
+            # Needed when interfaces are added to existing instances.
+            for iface in ifaces:
+                nw_info.append(network_model.VIF(
+                    id=iface['id'],
+                    address=iface['address'],
+                    network=iface['network'],
+                    type=iface['type'],
+                    ovs_interfaceid=iface['ovs_interfaceid'],
+                    devname=iface['devname']))
+
             net_ids = [n['id'] for n in networks]
+
         ports = [port for port in ports if port['network_id'] in net_ids]
         _ensure_requested_network_ordering(lambda x: x['network_id'],
                                            ports, net_ids)
 
-        nw_info = network_model.NetworkInfo()
         for port in ports:
             network_IPs = self._nw_info_get_ips(client, port)
             subnets = self._nw_info_get_subnets(context, port, network_IPs)

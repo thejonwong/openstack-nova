@@ -34,6 +34,7 @@ CONN_ABORT_ERROR = 'Software caused connection abort'
 ADDRESS_IN_USE_ERROR = 'Address already in use'
 
 vmwareapi_wsdl_loc_opt = cfg.StrOpt('wsdl_location',
+        #Deprecated in Icehouse
         deprecated_name='vmwareapi_wsdl_loc',
         deprecated_group='DEFAULT',
         help='Optional VIM Service WSDL Location '
@@ -49,6 +50,32 @@ def get_moref(value, type):
     moref = suds.sudsobject.Property(value)
     moref._type = type
     return moref
+
+
+def object_to_dict(obj, list_depth=1):
+    """Convert Suds object into serializable format.
+
+    The calling function can limit the amount of list entries that
+    are converted.
+    """
+    d = {}
+    for k, v in suds.sudsobject.asdict(obj).iteritems():
+        if hasattr(v, '__keylist__'):
+            d[k] = object_to_dict(v, list_depth=list_depth)
+        elif isinstance(v, list):
+            d[k] = []
+            used = 0
+            for item in v:
+                used = used + 1
+                if used > list_depth:
+                    break
+                if hasattr(item, '__keylist__'):
+                    d[k].append(object_to_dict(item, list_depth=list_depth))
+                else:
+                    d[k].append(item)
+        else:
+            d[k] = v
+    return d
 
 
 class VIMMessagePlugin(suds.plugin.MessagePlugin):

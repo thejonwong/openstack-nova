@@ -138,6 +138,7 @@ xenapi_vm_utils_opts = [
     ]
 
 CONF = cfg.CONF
+# xenapi_vm_utils options in the DEFAULT group were deprecated in Icehouse
 CONF.register_opts(xenapi_vm_utils_opts, 'xenserver')
 CONF.import_opt('default_ephemeral_format', 'nova.virt.driver')
 CONF.import_opt('use_cow_images', 'nova.virt.driver')
@@ -216,8 +217,33 @@ class ImageType(object):
         }.get(image_type_id)
 
 
+def get_vm_device_id(session, image_properties):
+    # NOTE: device_id should be 2 for windows VMs which run new xentools
+    # (>=6.1). Refer to http://support.citrix.com/article/CTX135099 for more
+    # information.
+    if image_properties is None:
+        image_properties = {}
+    device_id = image_properties.get('xenapi_device_id')
+
+    # The device_id is required to be set for hypervisor version 6.1 and above
+    if device_id:
+        hypervisor_version = session.product_version
+        if _hypervisor_supports_device_id(hypervisor_version):
+            return device_id
+        else:
+            msg = _("Device id %(id)s specified is not supported by "
+                    "hypervisor version %(version)s") % {'id': device_id,
+                    'version': hypervisor_version}
+            raise exception.NovaException(msg)
+
+
+def _hypervisor_supports_device_id(version):
+    hypervisor_major_minor_version = utils.get_major_minor_version(version)
+    return(hypervisor_major_minor_version >= 6.1)
+
+
 def create_vm(session, instance, name_label, kernel, ramdisk,
-              use_pv_kernel=False):
+              use_pv_kernel=False, device_id=None):
     """Create a VM record.  Returns new VM reference.
     the use_pv_kernel flag indicates whether the guest is HVM or PV
 
@@ -293,6 +319,9 @@ def create_vm(session, instance, name_label, kernel, ramdisk,
         rec['platform']['nx'] = 'true'
         rec['HVM_boot_params'] = {'order': 'dc'}
         rec['HVM_boot_policy'] = 'BIOS order'
+
+    if device_id:
+        rec['platform']['device_id'] = device_id
 
     vm_ref = session.call_xenapi('VM.create', rec)
     LOG.debug(_('Created VM'), instance=instance)
@@ -1211,8 +1240,8 @@ def _create_cached_image(context, session, instance, name_label,
             new_vdi_ref = session.call_xenapi("VDI.copy", cache_vdi_ref,
                                               sr_ref)
 
-        session.call_xenapi('VDI.set_name_label', cache_vdi_ref, '')
-        session.call_xenapi('VDI.set_name_description', cache_vdi_ref, '')
+        session.call_xenapi('VDI.set_name_label', new_vdi_ref, '')
+        session.call_xenapi('VDI.set_name_description', new_vdi_ref, '')
         session.call_xenapi('VDI.remove_from_other_config',
                             new_vdi_ref, 'image-id')
 
@@ -1426,7 +1455,7 @@ def _check_vdi_size(context, session, instance, vdi_uuid):
                   {'size': size, 'allowed_size': allowed_size},
                   instance=instance)
 
-        raise exception.InstanceTypeDiskTooSmall()
+        raise exception.FlavorDiskTooSmall()
 
 
 def _fetch_disk_image(context, session, instance, name_label, image_id,
@@ -2065,7 +2094,7 @@ def vdi_attached_here(session, vdi_ref, read_only=False):
                          read_only=read_only, bootable=False)
     try:
         LOG.debug(_('Plugging VBD %s ... '), vbd_ref)
-        session.call_xenapi("VBD.plug", vbd_ref)
+        volume_utils.vbd_plug(session, vbd_ref, this_vm_ref)
         try:
             LOG.debug(_('Plugging VBD %s done.'), vbd_ref)
             orig_dev = session.call_xenapi("VBD.get_device", vbd_ref)

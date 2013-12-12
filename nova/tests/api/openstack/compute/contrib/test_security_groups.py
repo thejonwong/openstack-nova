@@ -746,7 +746,7 @@ class TestSecurityGroupRules(test.TestCase):
         req = fakes.HTTPRequest.blank('/v2/fake/os-security-group-rules')
         res_dict = self.controller.create(req, {'security_group_rule': rule})
         security_group_rule = res_dict['security_group_rule']
-        self.assertNotEquals(security_group_rule['id'], 0)
+        self.assertNotEqual(security_group_rule['id'], 0)
         self.assertEqual(security_group_rule['parent_group_id'],
                          self.sg2['id'])
         self.assertEqual(security_group_rule['ip_range']['cidr'],
@@ -760,7 +760,7 @@ class TestSecurityGroupRules(test.TestCase):
         res_dict = self.controller.create(req, {'security_group_rule': rule})
 
         security_group_rule = res_dict['security_group_rule']
-        self.assertNotEquals(security_group_rule['id'], 0)
+        self.assertNotEqual(security_group_rule['id'], 0)
         self.assertEqual(security_group_rule['parent_group_id'],
                          self.sg2['id'])
 
@@ -778,7 +778,7 @@ class TestSecurityGroupRules(test.TestCase):
         res_dict = self.controller.create(req, {'security_group_rule': rule2})
 
         security_group_rule = res_dict['security_group_rule']
-        self.assertNotEquals(security_group_rule['id'], 0)
+        self.assertNotEqual(security_group_rule['id'], 0)
         self.assertEqual(security_group_rule['parent_group_id'],
                          self.sg2['id'])
         self.assertEqual(security_group_rule['from_port'], 81)
@@ -990,7 +990,7 @@ class TestSecurityGroupRules(test.TestCase):
         res_dict = self.controller.create(req, {'security_group_rule': rule})
 
         security_group_rule = res_dict['security_group_rule']
-        self.assertNotEquals(security_group_rule['id'], 0)
+        self.assertNotEqual(security_group_rule['id'], 0)
         self.assertEqual(security_group_rule['parent_group_id'],
                          self.parent_security_group['id'])
         self.assertEqual(security_group_rule['ip_range']['cidr'],
@@ -1026,7 +1026,7 @@ class TestSecurityGroupRules(test.TestCase):
         req = fakes.HTTPRequest.blank('/v2/fake/os-security-group-rules')
         res_dict = self.controller.create(req, {'security_group_rule': rule})
         security_group_rule = res_dict['security_group_rule']
-        self.assertNotEquals(security_group_rule['id'], 0)
+        self.assertNotEqual(security_group_rule['id'], 0)
         self.assertEqual(security_group_rule['parent_group_id'],
                          self.sg1['id'])
         self.assertEqual(security_group_rule['group']['name'],
@@ -1160,7 +1160,7 @@ class TestSecurityGroupRules(test.TestCase):
         res_dict = self.controller.create(req, {'security_group_rule': rule})
 
         security_group_rule = res_dict['security_group_rule']
-        self.assertNotEquals(security_group_rule['id'], 0)
+        self.assertNotEqual(security_group_rule['id'], 0)
         self.assertEqual(security_group_rule['parent_group_id'],
                          self.parent_security_group['id'])
         self.assertEqual(security_group_rule['ip_range']['cidr'],
@@ -1174,7 +1174,7 @@ class TestSecurityGroupRules(test.TestCase):
         res_dict = self.controller.create(req, {'security_group_rule': rule})
 
         security_group_rule = res_dict['security_group_rule']
-        self.assertNotEquals(security_group_rule['id'], 0)
+        self.assertNotEqual(security_group_rule['id'], 0)
         self.assertEqual(security_group_rule['parent_group_id'],
                          self.parent_security_group['id'])
         self.assertEqual(security_group_rule['ip_range']['cidr'],
@@ -1188,7 +1188,7 @@ class TestSecurityGroupRules(test.TestCase):
         res_dict = self.controller.create(req, {'security_group_rule': rule})
 
         security_group_rule = res_dict['security_group_rule']
-        self.assertNotEquals(security_group_rule['id'], 0)
+        self.assertNotEqual(security_group_rule['id'], 0)
         self.assertEqual(security_group_rule['parent_group_id'],
                          self.parent_security_group['id'])
         self.assertEqual(security_group_rule['ip_range']['cidr'],
@@ -1513,9 +1513,14 @@ def fake_compute_create(*args, **kwargs):
     return ([fake_compute_get(*args, **kwargs)], '')
 
 
-def fake_get_instances_security_groups_bindings(inst, context):
-    return {UUID1: [{'name': 'fake-0-0'}, {'name': 'fake-0-1'}],
-            UUID2: [{'name': 'fake-1-0'}, {'name': 'fake-1-1'}]}
+def fake_get_instances_security_groups_bindings(inst, context, servers):
+    groups = {UUID1: [{'name': 'fake-0-0'}, {'name': 'fake-0-1'}],
+              UUID2: [{'name': 'fake-1-0'}, {'name': 'fake-1-1'}],
+              UUID3: [{'name': 'fake-2-0'}, {'name': 'fake-2-1'}]}
+    result = {}
+    for server in servers:
+        result[server['id']] = groups.get(server['id'])
+    return result
 
 
 class SecurityGroupsOutputTest(test.TestCase):

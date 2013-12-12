@@ -95,6 +95,7 @@ xenapi_agent_opts = [
 ]
 
 CONF = cfg.CONF
+# xenapi_agent options in the DEFAULT group were deprecated in Icehouse
 CONF.register_opts(xenapi_agent_opts, 'xenserver')
 
 
@@ -261,7 +262,8 @@ class XenAPIBasedAgent(object):
     def _exchange_key_with_agent(self):
         dh = SimpleDH()
         args = {'pub': str(dh.get_public())}
-        resp = self._call_agent('key_init', args, success_codes=['D0'])
+        resp = self._call_agent('key_init', args, success_codes=['D0'],
+                                ignore_errors=False)
         agent_pub = int(resp)
         dh.compute_shared(agent_pub)
         return dh
@@ -288,7 +290,12 @@ class XenAPIBasedAgent(object):
         """
         LOG.debug(_('Setting admin password'), instance=self.instance)
 
-        dh = self._exchange_key_with_agent()
+        try:
+            dh = self._exchange_key_with_agent()
+        except exception.AgentError as error:
+            self._add_instance_fault(error, sys.exc_info())
+            return
+
         # Some old versions of Linux and Windows agent expect trailing \n
         # on password to work correctly.
         enc_pass = dh.encrypt(new_pass + '\n')

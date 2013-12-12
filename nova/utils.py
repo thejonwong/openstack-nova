@@ -37,6 +37,7 @@ from xml.sax import saxutils
 import eventlet
 import netaddr
 from oslo.config import cfg
+import six
 
 from nova import exception
 from nova.openstack.common import excutils
@@ -948,7 +949,7 @@ def check_string_length(value, name, min_length=0, max_length=None):
     :param min_length: the min_length of the string
     :param max_length: the max_length of the string
     """
-    if not isinstance(value, basestring):
+    if not isinstance(value, six.string_types):
         msg = _("%s is not a string or unicode") % name
         raise exception.InvalidInput(message=msg)
 
@@ -1002,7 +1003,7 @@ def is_none_string(val):
     """
     Check if a string represents a None value.
     """
-    if not isinstance(val, basestring):
+    if not isinstance(val, six.string_types):
         return False
 
     return val.lower() == 'none'
@@ -1031,6 +1032,18 @@ def convert_version_to_str(version_int):
 
 def convert_version_to_tuple(version_str):
     return tuple(int(part) for part in version_str.split('.'))
+
+
+def get_major_minor_version(version):
+    try:
+        if type(version) == int or type(version) == float:
+            return version
+        if type(version) == str:
+            major_minor_versions = version.split(".")[0:2]
+            version_as_float = float(".".join(major_minor_versions))
+            return version_as_float
+    except Exception:
+        raise exception.NovaException(_("Version %s invalid") % version)
 
 
 def is_neutron():

@@ -1180,6 +1180,20 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj.parse_str(xmldoc)
         self.assertEqual(len(obj.devices), 0)
 
+    def test_ConfigGuest_parese_cpu(self):
+        xmldoc = """ <domain>
+                       <cpu mode='custom' match='exact'>
+                         <model>kvm64</model>
+                       </cpu>
+                     </domain>
+                """
+        obj = config.LibvirtConfigGuest()
+        obj.parse_str(xmldoc)
+
+        self.assertEqual(obj.cpu.mode, 'custom')
+        self.assertEqual(obj.cpu.match, 'exact')
+        self.assertEqual(obj.cpu.model, 'kvm64')
+
 
 class LibvirtConfigGuestSnapshotTest(LibvirtConfigBaseTest):
 
@@ -1528,3 +1542,28 @@ class LibvirtConfigNodeDevicePciSubFunctionCap(LibvirtConfigBaseTest):
         self.assertEqual([("0000", "0x0a", "0x1", "0x1"),
                           ("0001", "0x0a", "0x02", "0x03"), ],
                          fun_capability.device_addrs)
+
+
+class LibvirtConfigGuestVideoTest(LibvirtConfigBaseTest):
+
+    def test_config_video_driver(self):
+        obj = config.LibvirtConfigGuestVideo()
+        obj.type = 'qxl'
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+                <video>
+                    <model type='qxl'/>
+                </video>""")
+
+    def test_config_video_driver_vram_heads(self):
+        obj = config.LibvirtConfigGuestVideo()
+        obj.type = 'qxl'
+        obj.vram = '9216'
+        obj.heads = '1'
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+                <video>
+                    <model type='qxl' vram='9216' heads='1'/>
+                </video>""")

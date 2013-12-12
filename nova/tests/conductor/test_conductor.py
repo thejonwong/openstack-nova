@@ -15,6 +15,8 @@
 
 """Tests for the conductor service."""
 
+import contextlib
+import mock
 import mox
 
 from nova.api.ec2 import ec2utils
@@ -1460,6 +1462,33 @@ class _BaseTaskTestCase(object):
         system_metadata['shelved_host'] = 'fake-mini'
         self.conductor_manager.unshelve_instance(self.context, instance)
 
+    def test_unshelve_instance_schedule_and_rebuild_novalid_host(self):
+        db_instance = jsonutils.to_primitive(self._create_fake_instance())
+        instance = instance_obj.Instance.get_by_uuid(self.context,
+                db_instance['uuid'], expected_attrs=['system_metadata'])
+        instance.vm_state = vm_states.SHELVED_OFFLOADED
+        instance.save()
+        filter_properties = {}
+        system_metadata = instance.system_metadata
+
+        def fake_schedule_instances(context, image, filter_properties,
+                                    *instances):
+            raise exc.NoValidHost(reason='')
+
+        with contextlib.nested(
+            mock.patch.object(self.conductor_manager, '_get_image',
+                              return_value='fake_image'),
+            mock.patch.object(self.conductor_manager, '_schedule_instances',
+                              fake_schedule_instances)
+        ) as (_get_image, _schedule_instances):
+            system_metadata['shelved_at'] = timeutils.utcnow()
+            system_metadata['shelved_image_id'] = 'fake_image_id'
+            system_metadata['shelved_host'] = 'fake-mini'
+            self.conductor_manager.unshelve_instance(self.context, instance)
+            _get_image.assert_has_calls([mock.call(self.context,
+                                      system_metadata['shelved_image_id'])])
+            self.assertEqual(vm_states.SHELVED_OFFLOADED, instance.vm_state)
+
     def test_unshelve_instance_schedule_and_rebuild_volume_backed(self):
         db_instance = jsonutils.to_primitive(self._create_fake_instance())
         instance = instance_obj.Instance.get_by_uuid(self.context,
@@ -1552,16 +1581,11 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
         live_migrate.execute(self.context, mox.IsA(instance_obj.Instance),
                              'destination', 'block_migration',
                              'disk_over_commit').AndRaise(ex)
-        scheduler_utils.set_vm_state_and_notify(self.context,
-                'compute_task', 'migrate_server',
-                {'vm_state': vm_states.ERROR},
-                ex, self._build_request_spec(inst_obj),
-                self.conductor_manager.db)
         self.mox.ReplayAll()
 
         self.conductor = utils.ExceptionHelper(self.conductor)
 
-        self.assertRaises(IOError,
+        self.assertRaises(exc.MigrationError,
             self.conductor.migrate_server, self.context, inst_obj,
             {'host': 'destination'}, True, False, None, 'block_migration',
             'disk_over_commit')
@@ -1672,7 +1696,8 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                                      'flavor', filter_props, resvs)
 
     def test_cold_migrate_exception_host_in_error_state_and_raise(self):
-        inst = fake_instance.fake_db_instance(image_ref='fake-image_ref')
+        inst = fake_instance.fake_db_instance(image_ref='fake-image_ref',
+                                              vm_state=vm_states.STOPPED)
         inst_obj = instance_obj.Instance._from_db_object(
                 self.context, instance_obj.Instance(), inst,
                 expected_attrs=[])
@@ -1724,7 +1749,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                 filter_properties=expected_filter_props,
                 node=hosts[0]['nodename']).AndRaise(exc_info)
 
-        updates = {'vm_state': vm_states.ERROR,
+        updates = {'vm_state': vm_states.STOPPED,
                    'task_state': None}
 
         self.conductor._set_vm_state_and_notify(self.context,

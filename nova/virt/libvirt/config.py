@@ -338,6 +338,11 @@ class LibvirtConfigGuestCPU(LibvirtConfigCPU):
         self.mode = None
         self.match = "exact"
 
+    def parse_dom(self, xmldoc):
+        super(LibvirtConfigGuestCPU, self).parse_dom(xmldoc)
+        self.mode = xmldoc.get('mode')
+        self.match = xmldoc.get('match')
+
     def format_dom(self):
         cpu = super(LibvirtConfigGuestCPU, self).format_dom()
 
@@ -901,6 +906,33 @@ class LibvirtConfigGuestGraphics(LibvirtConfigGuestDevice):
         return dev
 
 
+class LibvirtConfigGuestVideo(LibvirtConfigGuestDevice):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigGuestVideo, self).__init__(root_name="video",
+                                                      **kwargs)
+
+        self.type = 'cirrus'
+        self.vram = None
+        self.heads = None
+
+    def format_dom(self):
+        dev = super(LibvirtConfigGuestVideo, self).format_dom()
+
+        model = etree.Element("model")
+        model.set("type", self.type)
+
+        if self.vram:
+            model.set("vram", str(self.vram))
+
+        if self.heads:
+            model.set("heads", str(self.heads))
+
+        dev.append(model)
+
+        return dev
+
+
 class LibvirtConfigGuestHostdev(LibvirtConfigGuestDevice):
     def __init__(self, **kwargs):
         super(LibvirtConfigGuestHostdev, self).\
@@ -1150,6 +1182,7 @@ class LibvirtConfigGuest(LibvirtConfigObject):
     def parse_dom(self, xmldoc):
         # Note: This cover only for: LibvirtConfigGuestDisks
         #                            LibvirtConfigGuestHostdevPCI
+        #                            LibvirtConfigGuestCPU
         for c in xmldoc.getchildren():
             if c.tag == 'devices':
                 for d in c.getchildren():
@@ -1161,6 +1194,10 @@ class LibvirtConfigGuest(LibvirtConfigObject):
                         obj = LibvirtConfigGuestHostdevPCI()
                         obj.parse_dom(d)
                         self.devices.append(obj)
+            elif c.tag == 'cpu':
+                obj = LibvirtConfigGuestCPU()
+                obj.parse_dom(c)
+                self.cpu = obj
 
     def add_device(self, dev):
         self.devices.append(dev)

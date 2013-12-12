@@ -51,6 +51,7 @@ class FlavorManageController(wsgi.Controller):
 
         return webob.Response(status_int=204)
 
+    @wsgi.response(201)
     @wsgi.action("create")
     @extensions.expected_errors((400, 409))
     @wsgi.serializers(xml=flavors_api.FlavorTemplate)
@@ -71,7 +72,7 @@ class FlavorManageController(wsgi.Controller):
         ephemeral_gb = vals.get('ephemeral', 0)
         swap = vals.get('swap', 0)
         rxtx_factor = vals.get('rxtx_factor', 1.0)
-        is_public = vals.get('os-flavor-access:is_public', True)
+        is_public = vals.get('flavor-access:is_public', True)
 
         try:
             flavor = flavors.create(name, memory, vcpus, root_gb,
@@ -83,8 +84,8 @@ class FlavorManageController(wsgi.Controller):
                 flavors.add_flavor_access(flavor['flavorid'],
                                           context.project_id, context)
             req.cache_db_flavor(flavor)
-        except (exception.InstanceTypeExists,
-                exception.InstanceTypeIdExists) as err:
+        except (exception.FlavorExists,
+                exception.FlavorIdExists) as err:
             raise webob.exc.HTTPConflict(explanation=err.format_message())
         except exception.InvalidInput as exc:
             raise webob.exc.HTTPBadRequest(explanation=exc.format_message())

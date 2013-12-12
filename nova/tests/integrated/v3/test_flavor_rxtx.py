@@ -19,7 +19,6 @@ from nova.tests.integrated.v3 import api_sample_base
 
 class FlavorRxtxJsonTest(api_sample_base.ApiSampleTestBaseV3):
     extension_name = 'os-flavor-rxtx'
-    extra_extensions_to_load = ['flavor-manage']
 
     def test_flavor_rxtx_get(self):
         flavor_id = 1
@@ -45,7 +44,7 @@ class FlavorRxtxJsonTest(api_sample_base.ApiSampleTestBaseV3):
                                  'flavor-rxtx-post-req',
                                  subs)
         subs.update(self._get_regexes())
-        self._verify_response('flavor-rxtx-post-resp', subs, response, 200)
+        self._verify_response('flavor-rxtx-post-resp', subs, response, 201)
 
 
 class FlavorRxtxXmlTest(FlavorRxtxJsonTest):

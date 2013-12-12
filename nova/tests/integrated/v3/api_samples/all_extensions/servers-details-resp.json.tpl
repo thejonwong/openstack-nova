@@ -60,6 +60,7 @@
             "os-extended-status:task_state": null,
             "os-extended-status:vm_state": "active",
             "os-extended-volumes:volumes_attached": [],
+            "os-pci:pci_devices": [{"id": 1}],
             "os-server-usage:launched_at": "%(timestamp)s",
             "os-server-usage:terminated_at": null,
             "progress": 0,

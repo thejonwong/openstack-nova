@@ -180,6 +180,13 @@ class ServerActionsControllerTest(test.TestCase):
                           self.controller._action_reboot,
                           req, FAKE_UUID, body)
 
+    def test_reboot_none(self):
+        body = dict(reboot=dict(type=None))
+        req = fakes.HTTPRequest.blank(self.url)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller._action_reboot,
+                          req, FAKE_UUID, body)
+
     def test_reboot_not_found(self):
         self.stubs.Set(db, 'instance_get_by_uuid',
                        return_server_not_found)
@@ -526,7 +533,7 @@ class ServerActionsControllerTest(test.TestCase):
                 image_ref=self._image_href,
                 kernel_id="", ramdisk_id="",
                 task_state=task_states.REBUILDING,
-                expected_task_state=None,
+                expected_task_state=[None],
                 progress=0, **attributes).AndReturn(
                         fakes.stub_instance(1, host='fake_host'))
         self.mox.ReplayAll()
@@ -678,7 +685,7 @@ class ServerActionsControllerTest(test.TestCase):
         self.stubs.Set(compute_api.API, 'resize', fake_resize)
 
         req = fakes.HTTPRequest.blank(self.url)
-        self.assertRaises(exception.TooManyInstances,
+        self.assertRaises(webob.exc.HTTPRequestEntityTooLarge,
                           self.controller._action_resize,
                           req, FAKE_UUID, body)
 

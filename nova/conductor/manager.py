@@ -14,6 +14,8 @@
 
 """Handles database requests from other nova services."""
 
+import six
+
 from nova.api.ec2 import ec2utils
 from nova import block_device
 from nova.cells import rpcapi as cells_rpcapi
@@ -124,7 +126,7 @@ class ConductorManager(manager.Manager):
                             "'%(key)s' on %(instance_uuid)s"),
                           {'key': key, 'instance_uuid': instance_uuid})
                 raise KeyError("unexpected update keyword '%s'" % key)
-            if key in datetime_fields and isinstance(value, basestring):
+            if key in datetime_fields and isinstance(value, six.string_types):
                 updates[key] = timeutils.parse_strtime(value)
 
         old_ref, instance_ref = self.db.instance_update_and_get_original(
@@ -657,7 +659,7 @@ class ComputeTaskManager(base.Base):
                                block_migration, disk_over_commit)
         elif not live and not rebuild and flavor:
             instance_uuid = instance['uuid']
-            with compute_utils.EventReporter(context, ConductorManager(),
+            with compute_utils.EventReporter(context, self.db,
                                          'cold_migrate', instance_uuid):
                 self._cold_migrate(context, instance, flavor,
                                    scheduler_hint['filter_properties'],
@@ -688,7 +690,8 @@ class ComputeTaskManager(base.Base):
             if reservations:
                 self.quotas.rollback(context, reservations)
 
-            LOG.warning(_("No valid host found for cold migrate"))
+            LOG.warning(_("No valid host found for cold migrate"),
+                        instance=instance)
             return
 
         try:
@@ -710,8 +713,8 @@ class ComputeTaskManager(base.Base):
                 filter_properties=filter_properties, node=node)
         except Exception as ex:
             with excutils.save_and_reraise_exception():
-                updates = {'vm_state': vm_states.ERROR,
-                            'task_state': None}
+                updates = {'vm_state': instance['vm_state'],
+                           'task_state': None}
                 self._set_vm_state_and_notify(context, 'migrate_server',
                                               updates, ex, request_spec)
                 if reservations:
@@ -736,6 +739,7 @@ class ComputeTaskManager(base.Base):
                 exception.DestinationHypervisorTooOld,
                 exception.InvalidLocalStorage,
                 exception.InvalidSharedStorage,
+                exception.HypervisorUnavailable,
                 exception.MigrationPreCheckError) as ex:
             with excutils.save_and_reraise_exception():
                 #TODO(johngarbutt) - eventually need instance actions here
@@ -749,14 +753,11 @@ class ComputeTaskManager(base.Base):
                              expected_task_state=task_states.MIGRATING,),
                         ex, request_spec, self.db)
         except Exception as ex:
-            with excutils.save_and_reraise_exception():
-                request_spec = {'instance_properties': {
-                    'uuid': instance['uuid'], },
-                }
-                scheduler_utils.set_vm_state_and_notify(context,
-                        'compute_task', 'migrate_server',
-                        {'vm_state': vm_states.ERROR},
-                        ex, request_spec, self.db)
+            LOG.error(_('Migration of instance %(instance_id)s to host'
+                       ' %(dest)s unexpectedly failed.'),
+                       {'instance_id': instance['uuid'], 'dest': destination},
+                       exc_info=True)
+            raise exception.MigrationError(reason=ex)
 
     def build_instances(self, context, instances, image, filter_properties,
             admin_password, injected_files, requested_networks,
@@ -814,12 +815,23 @@ class ComputeTaskManager(base.Base):
                     instance.vm_state = vm_states.ERROR
                     instance.save()
 
-            filter_properties = {}
-            hosts = self._schedule_instances(context, image,
-                                             filter_properties, instance)
-            host = hosts.pop(0)['host']
-            self.compute_rpcapi.unshelve_instance(context, instance, host,
-                    image)
+            try:
+                with compute_utils.EventReporter(context, self.db,
+                                                 'schedule_instances',
+                                                 instance.uuid):
+                    filter_properties = {}
+                    hosts = self._schedule_instances(context, image,
+                                                     filter_properties,
+                                                     instance)
+                    host = hosts.pop(0)['host']
+                    self.compute_rpcapi.unshelve_instance(context, instance,
+                                                          host, image)
+            except exception.NoValidHost as ex:
+                instance.task_state = None
+                instance.save()
+                LOG.warning(_("No valid host found for unshelve instance"),
+                            instance=instance)
+                return
         else:
             LOG.error(_('Unshelve attempted but vm_state not SHELVED or '
                         'SHELVED_OFFLOADED'), instance=instance)

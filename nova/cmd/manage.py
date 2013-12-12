@@ -60,6 +60,7 @@ import sys
 
 import netaddr
 from oslo.config import cfg
+import six
 
 from nova.api.ec2 import ec2utils
 from nova import availability_zones
@@ -942,7 +943,7 @@ class FlavorCommands(object):
             print(_("Must supply valid parameters to create flavor"))
             print(e)
             return 1
-        except exception.InstanceTypeExists:
+        except exception.FlavorExists:
             print(_("Flavor exists."))
             print(_("Please ensure flavor name and flavorid are "
                     "unique."))
@@ -961,7 +962,7 @@ class FlavorCommands(object):
         """Marks flavors as deleted."""
         try:
             flavors.destroy(name)
-        except exception.InstanceTypeNotFound:
+        except exception.FlavorNotFound:
             print(_("Valid flavor name is required"))
             return 1
         except db_exc.DBError as e:
@@ -996,7 +997,7 @@ class FlavorCommands(object):
         try:
             try:
                 inst_type = flavors.get_flavor_by_name(name)
-            except exception.InstanceTypeNotFoundByName as e:
+            except exception.FlavorNotFoundByName as e:
                 print(e)
                 return(2)
 
@@ -1019,7 +1020,7 @@ class FlavorCommands(object):
         try:
             try:
                 inst_type = flavors.get_flavor_by_name(name)
-            except exception.InstanceTypeNotFoundByName as e:
+            except exception.FlavorNotFoundByName as e:
                 print(e)
                 return(2)
 
@@ -1357,7 +1358,7 @@ def main():
         v = getattr(CONF.category, 'action_kwarg_' + k)
         if v is None:
             continue
-        if isinstance(v, basestring):
+        if isinstance(v, six.string_types):
             v = v.decode('utf-8')
         fn_kwargs[k] = v
 

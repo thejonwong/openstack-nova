@@ -23,12 +23,12 @@ A fake VMware VI API implementation.
 
 import collections
 import pprint
-import uuid
 
 from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import uuidutils
 from nova import unit
 from nova.virt.vmwareapi import error_util
 
@@ -109,6 +109,16 @@ class FakeRetrieveResult(object):
 
     def add_object(self, object):
         self.objects.append(object)
+
+
+class MissingProperty(object):
+    """Missing object in ObjectContent's missing set."""
+    def __init__(self, path='fake-path', message='fake_message',
+                 method_fault=None):
+        self.path = path
+        self.fault = DataObject()
+        self.fault.localizedMessage = message
+        self.fault.fault = method_fault
 
 
 def _get_object_refs(obj_type):
@@ -325,6 +335,38 @@ class VirtualMachine(ManagedObject):
         self.set("config.extraConfig", kwargs.get("extra_config", None))
         self.set('runtime.host', kwargs.get("runtime_host", None))
         self.device = kwargs.get("virtual_device")
+        # Sample of diagnostics data is below.
+        config = [
+            ('template', False),
+            ('vmPathName', 'fake_path'),
+            ('memorySizeMB', 512),
+            ('cpuReservation', 0),
+            ('memoryReservation', 0),
+            ('numCpu', 1),
+            ('numEthernetCards', 1),
+            ('numVirtualDisks', 1)]
+        self.set("summary.config", config)
+
+        quickStats = [
+            ('overallCpuUsage', 0),
+            ('overallCpuDemand', 0),
+            ('guestMemoryUsage', 0),
+            ('hostMemoryUsage', 141),
+            ('balloonedMemory', 0),
+            ('consumedOverheadMemory', 20)]
+        self.set("summary.quickStats", quickStats)
+
+        key1 = {'key': 'cpuid.AES'}
+        key2 = {'key': 'cpuid.AVX'}
+        runtime = [
+            ('connectionState', 'connected'),
+            ('powerState', 'poweredOn'),
+            ('toolsInstallerMounted', False),
+            ('suspendInterval', 0),
+            ('memoryOverhead', 21417984),
+            ('maxCpuUsage', 2000),
+            ('featureRequirement', [key1, key2])]
+        self.set("summary.runtime", runtime)
 
     def reconfig(self, factory, val):
         """
@@ -869,7 +911,7 @@ class FakeVim(object):
 
     def _login(self):
         """Logs in and sets the session object in the db."""
-        self._session = str(uuid.uuid4())
+        self._session = uuidutils.generate_uuid()
         session = DataObject()
         session.key = self._session
         _db_content['session'][self._session] = session
@@ -1106,9 +1148,6 @@ class FakeVim(object):
         elif attr_name == "ExtendVirtualDisk_Task":
             return lambda *args, **kwargs: self._extend_disk(attr_name,
                                                 kwargs.get("size"))
-        elif attr_name == "DeleteVirtualDisk_Task":
-            return lambda *args, **kwargs: self._delete_disk(attr_name,
-                                                *args, **kwargs)
         elif attr_name == "Destroy_Task":
             return lambda *args, **kwargs: self._unregister_vm(attr_name,
                                                                *args, **kwargs)

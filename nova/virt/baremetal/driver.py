@@ -23,6 +23,7 @@ A driver for Bare-metal platform.
 
 from oslo.config import cfg
 
+from nova.compute import flavors
 from nova.compute import power_state
 from nova import context as nova_context
 from nova import exception
@@ -47,12 +48,13 @@ opts = [
     cfg.StrOpt('volume_driver',
                default='nova.virt.baremetal.volume_driver.LibvirtVolumeDriver',
                help='Baremetal volume driver.'),
-    cfg.ListOpt('instance_type_extra_specs',
+    cfg.ListOpt('flavor_extra_specs',
                default=[],
                help='a list of additional capabilities corresponding to '
-               'instance_type_extra_specs for this compute '
+               'flavor_extra_specs for this compute '
                'host to advertise. Valid entries are name=value, pairs '
-               'For example, "key1:val1, key2:val2"'),
+               'For example, "key1:val1, key2:val2"',
+               deprecated_name='instance_type_extra_specs'),
     cfg.StrOpt('driver',
                default='nova.virt.baremetal.pxe.PXE',
                help='Baremetal driver back-end (pxe or tilera)'),
@@ -128,14 +130,14 @@ class BareMetalDriver(driver.ComputeDriver):
 
         extra_specs = {}
         extra_specs["baremetal_driver"] = CONF.baremetal.driver
-        for pair in CONF.baremetal.instance_type_extra_specs:
+        for pair in CONF.baremetal.flavor_extra_specs:
             keyval = pair.split(':', 1)
             keyval[0] = keyval[0].strip()
             keyval[1] = keyval[1].strip()
             extra_specs[keyval[0]] = keyval[1]
         if 'cpu_arch' not in extra_specs:
             LOG.warning(
-                    _('cpu_arch is not found in instance_type_extra_specs'))
+                    _('cpu_arch is not found in flavor_extra_specs'))
             extra_specs['cpu_arch'] = ''
         self.extra_specs = extra_specs
 
@@ -216,9 +218,18 @@ class BareMetalDriver(driver.ComputeDriver):
         ifaces = db.bm_interface_get_all_by_bm_node_id(context, node['id'])
         return set(iface['address'] for iface in ifaces)
 
+    def _set_default_ephemeral_device(self, instance):
+        flavor = flavors.extract_flavor(instance)
+        if flavor['ephemeral_gb']:
+            self.virtapi.instance_update(
+                nova_context.get_admin_context(), instance['uuid'],
+                {'default_ephemeral_device':
+                    '/dev/sda1'})
+
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
         node_uuid = self._require_node(instance)
+        self._set_default_ephemeral_device(instance)
 
         # NOTE(deva): this db method will raise an exception if the node is
         #             already in use. We call it here to ensure no one else

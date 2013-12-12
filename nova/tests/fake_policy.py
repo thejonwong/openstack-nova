@@ -148,8 +148,6 @@ policy_data = """
     "compute_extension:v3:console-output": "",
     "compute_extension:consoles": "",
     "compute_extension:v3:os-remote-consoles": "",
-    "compute_extension:coverage_ext": "is_admin:True",
-    "compute_extension:v3:os-coverage": "is_admin:True",
     "compute_extension:createserverext": "",
     "compute_extension:deferred_delete": "",
     "compute_extension:v3:os-deferred-delete": "",
@@ -176,10 +174,10 @@ policy_data = """
     "compute_extension:flavor_access": "",
     "compute_extension:flavor_access:addTenantAccess": "rule:admin_api",
     "compute_extension:flavor_access:removeTenantAccess": "rule:admin_api",
-    "compute_extension:v3:os-flavor-access": "",
-    "compute_extension:v3:os-flavor-access:remove_tenant_access":
+    "compute_extension:v3:flavor-access": "",
+    "compute_extension:v3:flavor-access:remove_tenant_access":
     "rule:admin_api",
-    "compute_extension:v3:os-flavor-access:add_tenant_access":
+    "compute_extension:v3:flavor-access:add_tenant_access":
     "rule:admin_api",
     "compute_extension:flavor_disabled": "",
     "compute_extension:v3:os-flavor-disabled": "",
@@ -236,6 +234,7 @@ policy_data = """
     "compute_extension:networks:view": "",
     "compute_extension:networks_associate": "",
     "compute_extension:os-tenant-networks": "",
+    "compute_extension:v3:os-pci:pci_servers": "",
     "compute_extension:quotas:show": "",
     "compute_extension:quotas:update": "",
     "compute_extension:quotas:delete": "",
@@ -284,8 +283,6 @@ policy_data = """
     "compute_extension:availability_zone:detail": "is_admin:True",
     "compute_extension:v3:os-availability-zone:detail": "is_admin:True",
     "compute_extension:used_limits_for_admin": "is_admin:True",
-    "compute_extension:v3:os-used-limits": "",
-    "compute_extension:v3:os-used-limits:tenant": "is_admin:True",
     "compute_extension:migrations:index": "is_admin:True",
     "compute_extension:v3:os-migrations:index": "is_admin:True",
     "compute_extension:os-assisted-volume-snapshots:create": "",

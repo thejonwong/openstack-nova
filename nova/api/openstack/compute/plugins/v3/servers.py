@@ -37,8 +37,10 @@ from nova.objects import instance as instance_obj
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common.rpc import common as rpc_common
+from nova.openstack.common import strutils
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
+from nova import policy
 from nova import utils
 
 
@@ -129,7 +131,7 @@ class ServersTemplate(xmlutil.TemplateBuilder):
 class ServerAdminPassTemplate(xmlutil.TemplateBuilder):
     def construct(self):
         root = xmlutil.TemplateElement('server')
-        root.set('admin_pass')
+        root.set('admin_password')
         return xmlutil.SlaveTemplate(root, 1, nsmap=server_nsmap)
 
 
@@ -157,7 +159,7 @@ class CommonDeserializer(wsgi.MetadataXMLDeserializer):
         server = {}
         server_node = self.find_first_child_named(node, 'server')
 
-        attributes = ["name", "image_ref", "flavor_ref", "admin_pass",
+        attributes = ["name", "image_ref", "flavor_ref", "admin_password",
                       "key_name"]
         for attr in attributes:
             if server_node.getAttribute(attr):
@@ -245,8 +247,8 @@ class ActionDeserializer(CommonDeserializer):
             raise AttributeError("No image_ref was specified in request")
         rebuild["image_ref"] = node.getAttribute("image_ref")
 
-        if node.hasAttribute("admin_pass"):
-            rebuild["admin_pass"] = node.getAttribute("admin_pass")
+        if node.hasAttribute("admin_password"):
+            rebuild["admin_password"] = node.getAttribute("admin_password")
 
         if self.controller:
             self.controller.server_rebuild_xml_deserialize(node, rebuild)
@@ -530,14 +532,45 @@ class ServersController(wsgi.Controller):
         if 'changes_since' in search_opts:
             search_opts['changes-since'] = search_opts.pop('changes_since')
 
-        if search_opts.get("vm_state") == "deleted":
+        if search_opts.get("vm_state") == ['deleted']:
             if context.is_admin:
                 search_opts['deleted'] = True
             else:
                 msg = _("Only administrators may list deleted instances")
                 raise exc.HTTPBadRequest(explanation=msg)
 
-        if 'all_tenants' not in search_opts:
+        # If tenant_id is passed as a search parameter this should
+        # imply that all_tenants is also enabled unless explicitly
+        # disabled. Note that the tenant_id parameter is filtered out
+        # by remove_invalid_options above unless the requestor is an
+        # admin.
+        if 'tenant_id' in search_opts and not 'all_tenants' in search_opts:
+            # We do not need to add the all_tenants flag if the tenant
+            # id associated with the token is the tenant id
+            # specified. This is done so a request that does not need
+            # the all_tenants flag does not fail because of lack of
+            # policy permission for compute:get_all_tenants when it
+            # doesn't actually need it.
+            if context.project_id != search_opts.get('tenant_id'):
+                search_opts['all_tenants'] = 1
+
+        # If all tenants is passed with 0 or false as the value
+        # then remove it from the search options. Nothing passed as
+        # the value for all_tenants is considered to enable the feature
+        all_tenants = search_opts.get('all_tenants')
+        if all_tenants:
+            try:
+                if not strutils.bool_from_string(all_tenants, True):
+                    del search_opts['all_tenants']
+            except ValueError as err:
+                raise exception.InvalidInput(str(err))
+
+        if 'all_tenants' in search_opts:
+            policy.enforce(context, 'compute:get_all_tenants',
+                           {'project_id': context.project_id,
+                            'user_id': context.user_id})
+            del search_opts['all_tenants']
+        else:
             if context.project_id:
                 search_opts['project_id'] = context.project_id
             else:
@@ -696,7 +729,7 @@ class ServersController(wsgi.Controller):
     def create(self, req, body):
         """Creates a new server for a given user."""
         if not self.is_valid_body(body, 'server'):
-            raise exc.HTTPUnprocessableEntity()
+            raise exc.HTTPBadRequest(_("The request body is invalid"))
 
         context = req.environ['nova.context']
         server_dict = body['server']
@@ -797,18 +830,18 @@ class ServersController(wsgi.Controller):
             msg = "UnicodeError: %s" % unicode(error)
             raise exc.HTTPBadRequest(explanation=msg)
         except (exception.ImageNotActive,
-                exception.InstanceTypeDiskTooSmall,
-                exception.InstanceTypeMemoryTooSmall,
-                exception.InstanceTypeNotFound,
+                exception.FlavorDiskTooSmall,
+                exception.FlavorMemoryTooSmall,
                 exception.InvalidMetadata,
                 exception.InvalidRequest,
                 exception.MultiplePortsNotApplicable,
+                exception.InstanceUserDataMalformed,
+                exception.PortNotFound,
                 exception.SecurityGroupNotFound,
-                exception.InstanceUserDataMalformed) as error:
+                exception.NetworkNotFound) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
-        except exception.PortNotFound as error:
-            raise exc.HTTPNotFound(explanation=error.format_message())
-        except exception.PortInUse as error:
+        except (exception.PortInUse,
+                exception.NoUniqueMatch) as error:
             raise exc.HTTPConflict(explanation=error.format_message())
 
         # If the caller wanted a reservation_id, return it
@@ -821,7 +854,7 @@ class ServersController(wsgi.Controller):
         server = self._view_builder.create(req, instances[0])
 
         if CONF.enable_instance_password:
-            server['server']['admin_pass'] = password
+            server['server']['admin_password'] = password
 
         robj = wsgi.ResponseObject(server)
 
@@ -867,7 +900,7 @@ class ServersController(wsgi.Controller):
     def update(self, req, id, body):
         """Update server then pass on to version-specific controller."""
         if not self.is_valid_body(body, 'server'):
-            raise exc.HTTPUnprocessableEntity()
+            raise exc.HTTPBadRequest(_("The request body is invalid"))
 
         ctxt = req.environ['nova.context']
         update_dict = {}
@@ -888,6 +921,7 @@ class ServersController(wsgi.Controller):
         try:
             instance = self.compute_api.get(ctxt, id, want_objects=True)
             req.cache_db_instance(instance)
+            policy.enforce(ctxt, 'compute:update', instance)
             instance.update(update_dict)
             instance.save()
         except exception.NotFound:
@@ -924,7 +958,7 @@ class ServersController(wsgi.Controller):
         except exception.MigrationNotFound:
             msg = _("Instance has not been resized.")
             raise exc.HTTPBadRequest(explanation=msg)
-        except exception.InstanceTypeNotFound:
+        except exception.FlavorNotFound:
             msg = _("Flavor used by the instance could not be found.")
             raise exc.HTTPBadRequest(explanation=msg)
         except exception.InstanceInvalidState as state_error:
@@ -938,6 +972,10 @@ class ServersController(wsgi.Controller):
     @wsgi.action('reboot')
     def _action_reboot(self, req, id, body):
         if 'reboot' in body and 'type' in body['reboot']:
+            if not isinstance(body['reboot']['type'], six.string_types):
+                msg = _("Argument 'type' for reboot must be a string")
+                LOG.error(msg)
+                raise exc.HTTPBadRequest(explanation=msg)
             valid_reboot_types = ['HARD', 'SOFT']
             reboot_type = body['reboot']['type'].upper()
             if not valid_reboot_types.count(reboot_type):
@@ -966,6 +1004,10 @@ class ServersController(wsgi.Controller):
 
         try:
             self.compute_api.resize(context, instance, flavor_id, **kwargs)
+        except exception.QuotaError as error:
+            raise exc.HTTPRequestEntityTooLarge(
+                explanation=error.format_message(),
+                headers={'Retry-After': 0})
         except exception.FlavorNotFound:
             msg = _("Unable to locate requested flavor.")
             raise exc.HTTPBadRequest(explanation=msg)
@@ -1126,8 +1168,8 @@ class ServersController(wsgi.Controller):
             msg = _("Cannot find image for rebuild")
             raise exc.HTTPBadRequest(explanation=msg)
         except (exception.ImageNotActive,
-                exception.InstanceTypeDiskTooSmall,
-                exception.InstanceTypeMemoryTooSmall,
+                exception.FlavorDiskTooSmall,
+                exception.FlavorMemoryTooSmall,
                 exception.InvalidMetadata) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
 
@@ -1135,10 +1177,10 @@ class ServersController(wsgi.Controller):
 
         view = self._view_builder.show(req, instance)
 
-        # Add on the admin_pass attribute since the view doesn't do it
+        # Add on the admin_password attribute since the view doesn't do it
         # unless instance passwords are disabled
         if CONF.enable_instance_password:
-            view['server']['admin_pass'] = password
+            view['server']['admin_password'] = password
 
         robj = wsgi.ResponseObject(view)
         return self._add_location(robj)
@@ -1218,12 +1260,12 @@ class ServersController(wsgi.Controller):
     def _get_server_admin_password(self, server):
         """Determine the admin password for a server on creation."""
         try:
-            password = server['admin_pass']
+            password = server['admin_password']
             self._validate_admin_password(password)
         except KeyError:
             password = utils.generate_password()
         except ValueError:
-            raise exc.HTTPBadRequest(explanation=_("Invalid admin_pass"))
+            raise exc.HTTPBadRequest(explanation=_("Invalid admin_password"))
 
         return password
 
