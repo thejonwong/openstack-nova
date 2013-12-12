@@ -197,6 +197,25 @@ def device_is_bridge_member(bridge, device):
     return rv
 
 
+def create_tap_dev(dev, mac_address=None):
+    """Create a tap device"""
+    if not device_exists(dev):
+        try:
+            _execute(*_ifconfig_cmd(dev, ['create']), run_as_root=True,
+                     check_exit_code=0)
+        except processutils.ProcessExecutionError:
+            with excutils.save_and_reraise_exception():
+                LOG.error(_("Failed creating device: '%s'"), dev)
+            return
+
+        if mac_address:
+            _execute(*_ifconfig_cmd(dev, ['ether', mac_address]),
+                     run_as_root=True, check_exit_code=0)
+
+        _execute(*_ifconfig_cmd(dev, ['up']), run_as_root=True,
+                 check_exit_code=0)
+
+
 def delete_net_dev(dev):
     """Delete network device if exists."""
     if device_exists(dev):
