@@ -220,7 +220,7 @@ def delete_net_dev(dev):
     """Delete network device if exists."""
     if device_exists(dev):
         try:
-            _execute(*_ifconfig_cmd(bridge, ['destroy']),
+            _execute(*_ifconfig_cmd(dev, ['destroy']),
                  run_as_root=True, check_exit_code=0)
             LOG.debug(_("Network device removed: '%s'"), dev)
         except processutils.ProcessExecutionError:
