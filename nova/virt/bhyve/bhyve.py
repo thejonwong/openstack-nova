@@ -157,10 +157,10 @@ class Bhyve:
 
 
     def get_vm_by_name(self, name):
-        """Get VM object by VM name.
+        """Get VM object of the running VM by its name.
 
         :param name:
-        :return:
+        :return: The VM object.
         """
         vm = self._running_vms.get(name)
         if vm:
