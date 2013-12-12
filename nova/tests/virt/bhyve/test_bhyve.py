@@ -16,12 +16,14 @@
 #    under the License.
 
 import os
+from sets import Set
 
 from oslo.config import cfg
 
 from nova import test
 from nova.virt.bhyve import bhyve
 from nova.virt.bhyve import images
+from nova.virt.bhyve import vif
 from nova import utils
 
 
@@ -289,3 +291,101 @@ class TestImages(test.NoDBTestCase):
 
         exists = os.path.exists(path)
         self.assertEqual(False, exists)
+
+
+class TestVifGetFreeTapNum(test.NoDBTestCase):
+    def setUp(self):
+        super(TestVifGetFreeTapNum, self).setUp()
+
+        self._vif_driver = vif.BhyveVifDriver()
+
+    def test_tap_not_exist(self):
+        self.stubs.Set(vif.network, 'device_exists', lambda _: False)
+
+        tap = self._vif_driver._get_free_tap_number()
+        self.assertNotEqual(None, tap)
+
+    def test_tap_100_existing(self):
+        for i in range(100, 200):
+            self._vif_driver._tap_nums.add(i)
+
+        self.stubs.Set(vif.network, 'device_exists',
+                       lambda x: x in self._vif_driver._tap_nums)
+
+        tap = self._vif_driver._get_free_tap_number()
+        self.assertEqual(200, tap)
+        tap = self._vif_driver._get_free_tap_number()
+        self.assertEqual(201, tap)
+        self._vif_driver._tap_nums.add('tap' + '202')
+        tap = self._vif_driver._get_free_tap_number()
+        self.assertEqual(203, tap)
+
+    def test_exciding_max_number(self):
+        for i in range(101, 111):
+            self._vif_driver._tap_nums.add(i)
+
+        self.stubs.Set(vif.network, 'device_exists',
+                       lambda x: x in self._vif_driver._tap_nums)
+
+        self._vif_driver._start_tap_num = 100
+        self._vif_driver._max_tap_num = 110
+        self._vif_driver._new_tap_num = 105
+
+        tap = self._vif_driver._get_free_tap_number()
+        self.assertEqual(100, tap)
+        self.assertEqual(101, self._vif_driver._new_tap_num)
+
+    def test_raising_exception(self):
+        for i in range(100, 111):
+            self._vif_driver._tap_nums.add(i)
+
+        self.stubs.Set(vif.network, 'device_exists',
+                       lambda x: x in self._vif_driver._tap_nums)
+
+        self._vif_driver._start_tap_num = 100
+        self._vif_driver._new_tap_num = 100
+        self._vif_driver._max_tap_num = 110
+
+        self.assertRaises(vif.exception.NovaException,
+                          self._vif_driver._get_free_tap_number)
+
+
+class TestVifPlugUnplug(test.NoDBTestCase):
+    def setUp(self):
+        super(TestVifPlugUnplug, self).setUp()
+
+        self._executes = []
+        def fake_execute(*cmd, **kwargs):
+            self._executes.append(cmd)
+            return None, None
+
+        self.stubs.Set(utils, 'execute', fake_execute)
+        self.stubs.Set(vif.network, 'create_tap_dev',
+                       lambda *cmd, **kwargs: None)
+
+        self._vif_driver = vif.BhyveVifDriver()
+
+    def test_add_iface_to_bridge(self):
+        vd = self._vif_driver
+        self.stubs.Set(vif.network, 'device_is_bridge_member',
+                       lambda a, b: False)
+        expected = [('ifconfig', 'bridge', 'addm', 'tap')]
+
+        vd._add_iface_to_bridge('tap', 'bridge')
+        self.assertEqual(expected, self._executes)
+
+    def test_plug_success(self):
+        vd = self._vif_driver
+        self.stubs.Set(vif.BhyveVifDriver, '_get_free_tap_number',
+                       lambda self: 100)
+        self.stubs.Set(vif.network, 'device_exists', lambda _: False)
+
+        instance = {}
+        vif_param = {
+            'id': '01234567890',
+            'network': {'bridge': 'bridge0'}
+        }
+        expected = [('ifconfig', 'bridge0', 'addm', 'tap100')]
+
+        vd.plug(vif_param)
+        self.assertEqual(expected, self._executes)
