@@ -19,6 +19,7 @@
 """
 A bhyve hypervisor's ComputeDriver implementation.
 """
+from nova.virt.bhyve import vif
 
 from oslo.config import cfg
 
@@ -31,6 +32,7 @@ from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.virt import driver
 from nova.virt import virtapi
+from nova.network import freebsd_net as network_driver
 
 import images
 import bhyve
@@ -107,6 +109,8 @@ class BhyveDriver(driver.ComputeDriver):
             set_nodes([CONF.host])
 
         self._bhyve = bhyve.Bhyve()
+        self._vif_driver = vif.BhyveVifDriver()
+        self._vms = {} # {Instance ID: bhyve.Vm object}
 
     def init_host(self, host):
         return
@@ -116,11 +120,34 @@ class BhyveDriver(driver.ComputeDriver):
 
     def plug_vifs(self, instance, network_info):
         """Plug VIFs into networks."""
-        pass
+
+        vm = self._vms.get(instance['uuid'])
+        if not vm:
+            LOG.error(_('Trying to plug VIF to non-existing VM'))
+            return
+
+        try:
+            for vif in network_info:
+                tap = self._vif_driver.plug(vif)
+
+                # TODO: driver type (virtio-net) shouldn't be fixed
+                vm.add_net_interface(tap, 'virtio-net')
+
+        except Exception as e:
+            LOG.error(_('Failed plugging vif(s) to the network bridge: %s' % e))
+            return
 
     def unplug_vifs(self, instance, network_info):
         """Unplug VIFs from networks."""
-        pass
+
+        vm = self._vms.get(instance['uuid'])
+        if not vm:
+            LOG.warn(_('Trying to remove the tap device associated with '
+                       'non-existing VM id=%s' % instance['uuid']))
+
+        for vif in network_info:
+            tap = self._vif_driver.unplug(vif)
+            vm.del_net_interface(tap)
 
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
@@ -134,7 +161,13 @@ class BhyveDriver(driver.ComputeDriver):
 
         vm = bhyve.Vm(self._bhyve, instance['name'], instance['vcpus'],
                       instance['memory_mb'])
+        # Save vm object
+        self._vms[instance['uuid']] = vm
+
+        # TODO: get rid of hardcoded driver
         vm.add_disk_image('ahci-hd', image_path, boot=True)
+
+        self.plug_vifs(instance, network_info)
         vm.run()
 
     def snapshot(self, context, instance, name, update_task_state):
@@ -191,16 +224,28 @@ class BhyveDriver(driver.ComputeDriver):
         Currently it is more 'unplug the cable' than 'power off' as bhyve does
         not provide a way to do it cleanly yet.
         """
+
+        # Destroy the VM if it exists.
         vm = self._bhyve.get_vm_by_name(instance['name'])
         if vm:
+            cfg = vm.get_config()
+
+            # Remove tap devices
+            for tap in cfg.net_interfaces:
+                network_driver.delete_net_dev(tap)
+
             vm.destroy()
 
     def power_on(self, context, instance, network_info, block_device_info):
-        image_path = images.get_instance_image_path(instance)
+        """Power on the instance"""
 
-        vm = bhyve.Vm(self._bhyve, instance['name'], instance['vcpus'],
-                      instance['memory_mb'])
-        vm.add_disk_image('ahci-hd', image_path, boot=True)
+        vm = self._vms.get(instance['uuid'])
+        if not vm:
+            LOG.warn(_('Trying to power on uknkown VM instance: %s'
+                       % instance['uuid']))
+            return
+
+        self.plug_vifs(instance, network_info)
         vm.run()
 
     def soft_delete(self, instance):
@@ -231,9 +276,13 @@ class BhyveDriver(driver.ComputeDriver):
                         {'key': key,
                          'inst': self.instances}, instance=instance)
 
-        vm = self._bhyve.get_vm_by_name(instance['name'])
+        vm = self._vms.get(instance['uuid'])
         if vm:
-            vm.destroy()
+            self._bhyve.destroy_vm(vm)
+            del self._vms[instance['uuid']]
+
+        # Remove tap devices from network bridge, destroy ifaces, etc.
+        self.unplug_vifs(instance, network_info)
 
         if destroy_disks:
             images.delete_instance_image(instance)
