@@ -107,6 +107,8 @@ class TestBhyve(test.NoDBTestCase):
 
         self.stubs.Set(bhyve, 'listdir', fake_listdir)
 
+        self.stubs.Set(bhyve.path, 'isdir', lambda _: True)
+
         copy = self._bhyve._running_vms
 
         self._bhyve._running_vms = {
