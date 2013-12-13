@@ -140,13 +140,13 @@ class BhyveDriver(driver.ComputeDriver):
     def unplug_vifs(self, instance, network_info):
         """Unplug VIFs from networks."""
 
-        vm = self._vms.get(instance['uuid'])
-        if not vm:
-            LOG.warn(_('Trying to remove the tap device associated with '
-                       'non-existing VM id=%s' % instance['uuid']))
-
         for vif in network_info:
             tap = self._vif_driver.unplug(vif)
+            vm = self._vms.get(instance['uuid'])
+            if not vm:
+                LOG.warn(_('Trying to remove the tap device associated with'
+                           ' non-existing VM id=%s' % instance['uuid']))
+                continue
             vm.del_net_interface(tap)
 
     def spawn(self, context, instance, image_meta, injected_files,
