@@ -271,6 +271,24 @@ class TestVm(test.NoDBTestCase):
         self.assertEqual(cfg.boot_device, '/path/to/disk')
 
 
+    def test_network_interfaces(self):
+        vm = bhyve.Vm(self._bhyve, 'VM1', 1, 1024)
+        vm.add_net_interface('tap0', 'driver')
+        vm.add_net_interface('tap1', 'driver')
+        vm.add_net_interface('tap2', 'driver')
+        expected = {
+            'tap0': 'driver',
+            'tap1': 'driver',
+            'tap2': 'driver'
+        }
+
+        ifaces = vm.net_interfaces
+        self.assertEqual(expected, ifaces)
+
+        del ifaces['tap0']
+        self.assertIn('tap0', vm.net_interfaces)
+
+
 class TestImages(test.NoDBTestCase):
     def setUp(self):
         super(TestImages, self).setUp()

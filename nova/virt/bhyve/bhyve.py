@@ -253,6 +253,10 @@ class Vm:
 
         del self._config.net_interfaces[tap]
 
+    @property
+    def net_interfaces(self):
+        return dict(self._config.net_interfaces)
+
     def run(self):
         return self._hypervisor.spawn_vm(self)
 
