@@ -208,7 +208,7 @@ class BhyveDriver(driver.ComputeDriver):
                                    block_device_info=None):
         pass
 
-    def finish_revert_migration(self, instance, network_info,
+    def finish_revert_migration(self, context, instance, network_info,
                                 block_device_info=None, power_on=True):
         pass
 
@@ -236,7 +236,8 @@ class BhyveDriver(driver.ComputeDriver):
 
             vm.destroy()
 
-    def power_on(self, context, instance, network_info, block_device_info):
+    def power_on(self, context, instance, network_info,
+                 block_device_info=None):
         """Power on the instance"""
 
         vm = self._vms.get(instance['uuid'])
@@ -263,7 +264,7 @@ class BhyveDriver(driver.ComputeDriver):
     def suspend(self, instance):
         pass
 
-    def resume(self, instance, network_info, block_device_info=None):
+    def resume(self, context, instance, network_info, block_device_info=None):
         pass
 
     def destroy(self, context, instance, network_info, block_device_info=None,
