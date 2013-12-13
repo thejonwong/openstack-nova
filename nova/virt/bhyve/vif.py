@@ -76,6 +76,9 @@ class BhyveVifDriver:
 
         return tap
 
+    def tap_name(self, vif):
+        return self._vifs[vif['id']]
+
     def _get_free_tap_number(self):
         """Retrieve first free tap device.
 
