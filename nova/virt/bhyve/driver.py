@@ -144,8 +144,9 @@ class BhyveDriver(driver.ComputeDriver):
             tap = self._vif_driver.unplug(vif)
             vm = self._vms.get(instance['uuid'])
             if not vm:
-                LOG.warn(_('Trying to remove the tap device associated with'
-                           ' non-existing VM id=%s' % instance['uuid']))
+                LOG.warn(_('Trying to remove the %s device ' % tap +
+                           'associated with non-existing VM id=%s'
+                           % instance['uuid']))
                 continue
             vm.del_net_interface(tap)
 
@@ -228,11 +229,9 @@ class BhyveDriver(driver.ComputeDriver):
         # Destroy the VM if it exists.
         vm = self._bhyve.get_vm_by_name(instance['name'])
         if vm:
-            cfg = vm.get_config()
-
-            # Remove tap devices
-            for tap in cfg.net_interfaces:
+            for tap in vm.net_interfaces:
                 network_driver.delete_net_dev(tap)
+                vm.del_net_interface(tap)
 
             vm.destroy()
 
@@ -277,13 +276,22 @@ class BhyveDriver(driver.ComputeDriver):
                         {'key': key,
                          'inst': self.instances}, instance=instance)
 
+        # Remove vm from our vm list.
         vm = self._vms.get(instance['uuid'])
         if vm:
-            self._bhyve.destroy_vm(vm)
             del self._vms[instance['uuid']]
 
-        # Remove tap devices from network bridge, destroy ifaces, etc.
-        self.unplug_vifs(instance, network_info)
+        # Destroy vm if it is running, saving taps to be destroyed.
+        taps = {}
+        vm = self._bhyve.get_vm_by_name(instance['name'])
+        if vm:
+            taps = vm.net_interfaces
+            self._bhyve.destroy_vm(vm)
+
+        # Clean up tap devices used by the destroyed vm.
+        for vif in network_info:
+            if self._vif_driver.tap_name(vif) in taps:
+                self._vif_driver.unplug(vif)
 
         if destroy_disks:
             images.delete_instance_image(instance)
