@@ -131,7 +131,7 @@ class BhyveDriver(driver.ComputeDriver):
                 tap = self._vif_driver.plug(vif)
 
                 # TODO: driver type (virtio-net) shouldn't be fixed
-                vm.add_net_interface(tap, 'virtio-net')
+                vm.add_net_interface(tap, 'virtio-net', vif['address'])
 
         except Exception as e:
             LOG.error(_('Failed plugging vif(s) to the network bridge: %s' % e))

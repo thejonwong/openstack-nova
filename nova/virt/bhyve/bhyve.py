@@ -206,9 +206,13 @@ class Bhyve:
 
         # Net devices
         for tap in vm_config.net_interfaces:
+            driver, mac = vm_config.net_interfaces[tap]
+            config = '%i:0,%s,%s' % (i, driver, tap)
+            if mac:
+                config += ',mac=%s' % mac
+
             pci_opts.append('-s')
-            pci_opts.append('%i:0,%s,%s' % (i, vm_config.net_interfaces[tap],
-                                            tap))
+            pci_opts.append(config)
             i += 1
 
         return [_BHYVE] + self._default_params + self._pci_params + pci_opts \
@@ -244,8 +248,8 @@ class Vm:
 
         del self._config.block_devices[path]
 
-    def add_net_interface(self, tap, driver):
-        self._config.net_interfaces[tap] = driver
+    def add_net_interface(self, tap, driver, mac=''):
+        self._config.net_interfaces[tap] = (driver, mac)
 
     def del_net_interface(self, tap):
         if tap not in self._config.net_interfaces:
@@ -255,7 +259,10 @@ class Vm:
 
     @property
     def net_interfaces(self):
-        return dict(self._config.net_interfaces)
+        """
+        :return: A list of tap device names used by the VM.
+        """
+        return self._config.net_interfaces.keys()
 
     def run(self):
         return self._hypervisor.spawn_vm(self)

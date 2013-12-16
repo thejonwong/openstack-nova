@@ -72,7 +72,27 @@ class TestBhyve(test.NoDBTestCase):
 
         cmd = self._bhyve._build_bhyve_cmd(self._vm.get_config())
 
-        self.assertEqual(cmd, result)
+        self.assertEqual(result, cmd)
+
+
+    def test_build_bhyve_cmd_with_mac(self):
+        result = ['bhyve'] + self._bhyve._default_params + \
+            self._bhyve._pci_params
+
+        result += [
+            '-s', '1:0,ahci-hd,/path/to/disk',
+            '-s', '2:0,virtio-net,tap0,mac=00:01:02:03:04:05',
+            '-m', '1024',
+            'VM1'
+        ]
+
+        vm = bhyve.Vm(self._bhyve, 'VM1', 1, 1024)
+        vm.add_disk_image('ahci-hd', '/path/to/disk', boot=True)
+        vm.add_net_interface('tap0', 'virtio-net', '00:01:02:03:04:05')
+
+        cmd = self._bhyve._build_bhyve_cmd(vm.get_config())
+
+        self.assertEqual(result, cmd)
 
 
     def test_spawn_vm(self):
@@ -276,18 +296,19 @@ class TestVm(test.NoDBTestCase):
     def test_network_interfaces(self):
         vm = bhyve.Vm(self._bhyve, 'VM1', 1, 1024)
         vm.add_net_interface('tap0', 'driver')
-        vm.add_net_interface('tap1', 'driver')
-        vm.add_net_interface('tap2', 'driver')
+        vm.add_net_interface('tap1', 'driver', '00:01:02:03:04:05')
+        vm.add_net_interface('tap2', 'driver', '0a:0b:0c:0d:0e:0f')
         expected = {
-            'tap0': 'driver',
-            'tap1': 'driver',
-            'tap2': 'driver'
+            'tap0': ('driver', ''),
+            'tap1': ('driver', '00:01:02:03:04:05'),
+            'tap2': ('driver', '0a:0b:0c:0d:0e:0f')
         }
 
-        ifaces = vm.net_interfaces
+        ifaces = vm._config.net_interfaces
+        ifaces_list = vm.net_interfaces
         self.assertEqual(expected, ifaces)
 
-        del ifaces['tap0']
+        del ifaces_list[ifaces_list.index('tap0')]
         self.assertIn('tap0', vm.net_interfaces)
 
 
