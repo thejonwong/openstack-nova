@@ -11,9 +11,8 @@ route: CommandFilter, route, root
 # nova/network/linux_net.py: 'dhcp_release', dev, address, mac_address
 #dhcp_release: CommandFilter, dhcp_release, root
 
-# nova/network/linux_net.py: 'kill', '-9', pid
-# nova/network/linux_net.py: 'kill', '-HUP', pid
-#kill_dnsmasq: KillFilter, root, /usr/sbin/dnsmasq, -9, -HUP
+# nova/network/freebsd_net.py: 'kill', ..
+kill_dnsmasq: KillFilter, root, /usr/local/sbin/dnsmasq, -9, -HUP
 
 # nova/network/freebsd_net.py: dnsmasq call
 dnsmasq: EnvFilter, env, root, CONFIG_FILE=, NETWORK_ID=, dnsmasq
