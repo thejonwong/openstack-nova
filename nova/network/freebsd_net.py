@@ -538,7 +538,8 @@ def get_dhcp_opts(context, network_ref):
 
 
 def release_dhcp(dev, address, mac_address):
-    utils.execute('dhcp_release', dev, address, mac_address, run_as_root=True)
+    # XXX The dhcp_release is currently (2013.12) not available on FreeBSD
+    LOG.warning(_('dhcp_release not available, skipping'))
 
 
 def update_dhcp(context, dev, network_ref):
