@@ -662,9 +662,9 @@ def restart_dhcp(context, dev, network_ref):
             try:
                 _execute('kill', '-HUP', pid, run_as_root=True)
                 #_add_dnsmasq_accept_rules(dev)
-                return
             except Exception as exc:  # pylint: disable=W0703
                 LOG.error(_('Hupping dnsmasq threw %s'), exc)
+            return
         else:
             LOG.debug(_('Pid %d is stale, relaunching dnsmasq'), pid)
 
