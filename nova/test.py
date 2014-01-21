@@ -31,7 +31,6 @@ import gettext
 import os
 import shutil
 import sys
-import tempfile
 import uuid
 
 import fixtures
@@ -200,6 +199,11 @@ class TestCase(testtools.TestCase):
     """
     USES_DB = True
 
+    # NOTE(rpodolyaka): this attribute can be overridden in subclasses in order
+    #                   to scale the global test timeout value set for each
+    #                   test case separately. Use 0 value to disable timeout.
+    TIMEOUT_SCALING_FACTOR = 1
+
     def setUp(self):
         """Run before each test method to initialize test environment."""
         super(TestCase, self).setUp()
@@ -209,6 +213,12 @@ class TestCase(testtools.TestCase):
         except ValueError:
             # If timeout value is invalid do not set a timeout.
             test_timeout = 0
+
+        if self.TIMEOUT_SCALING_FACTOR >= 0:
+            test_timeout *= self.TIMEOUT_SCALING_FACTOR
+        else:
+            raise ValueError('TIMEOUT_SCALING_FACTOR value must be >= 0')
+
         if test_timeout > 0:
             self.useFixture(fixtures.Timeout(test_timeout, gentle=True))
         self.useFixture(fixtures.NestedTempfile())
@@ -253,8 +263,6 @@ class TestCase(testtools.TestCase):
         CONF.set_override('fatal_exception_format_errors', True)
         CONF.set_override('enabled', True, 'osapi_v3')
         CONF.set_override('force_dhcp_release', False)
-        # This will be cleaned up by the NestedTempfile fixture
-        CONF.set_override('lock_path', tempfile.mkdtemp())
 
     def _restore_obj_registry(self):
         objects_base.NovaObject._obj_classes = self._base_test_obj_backup

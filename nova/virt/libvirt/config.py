@@ -45,7 +45,8 @@ class LibvirtConfigObject(object):
         self.ns_prefix = kwargs.get('ns_prefix')
         self.ns_uri = kwargs.get('ns_uri')
 
-    def _text_node(self, name, value):
+    @staticmethod
+    def _text_node(name, value):
         child = etree.Element(name)
         child.text = str(value)
         return child
@@ -486,6 +487,7 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
         self.logical_block_size = None
         self.physical_block_size = None
         self.readonly = False
+        self.snapshot = None
 
     def format_dom(self):
         dev = super(LibvirtConfigGuestDisk, self).format_dom()

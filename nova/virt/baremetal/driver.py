@@ -34,7 +34,6 @@ from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.virt.baremetal import baremetal_states
 from nova.virt.baremetal import db
-from nova.virt.baremetal import pxe
 from nova.virt import driver
 from nova.virt import firewall
 from nova.virt.libvirt import imagecache
@@ -258,6 +257,8 @@ class BareMetalDriver(driver.ComputeDriver):
             self.power_off(instance, node)
             self.power_on(context, instance, network_info, block_device_info,
                           node)
+            _update_state(context, node, instance, baremetal_states.PREPARED)
+
             self.driver.activate_node(context, node, instance)
             _update_state(context, node, instance, baremetal_states.ACTIVE)
         except Exception:
@@ -325,6 +326,11 @@ class BareMetalDriver(driver.ComputeDriver):
                 except Exception:
                     LOG.error(_("Error while recording destroy failure in "
                                 "baremetal database: %s") % e)
+
+    def cleanup(self, context, instance, network_info, block_device_info=None,
+                destroy_disks=True):
+        """Cleanup after instance being destroyed."""
+        pass
 
     def power_off(self, instance, node=None):
         """Power off the specified instance."""
@@ -497,10 +503,10 @@ class BareMetalDriver(driver.ComputeDriver):
 
     def manage_image_cache(self, context, all_instances):
         """Manage the local cache of images."""
-        self.image_cache_manager.verify_base_images(context, all_instances)
+        self.image_cache_manager.update(context, all_instances)
 
-    def get_console_output(self, instance):
-        node = _get_baremetal_node_by_instance_uuid(instance['uuid'])
+    def get_console_output(self, context, instance):
+        node = _get_baremetal_node_by_instance_uuid(instance.uuid)
         return self.driver.get_console_output(node, instance)
 
     def get_available_nodes(self, refresh=False):
@@ -509,17 +515,4 @@ class BareMetalDriver(driver.ComputeDriver):
                 db.bm_node_get_all(context, service_host=CONF.host)]
 
     def dhcp_options_for_instance(self, instance):
-        # NOTE(deva): This only works for PXE driver currently:
-        # If not running the PXE driver, you should not enable
-        # DHCP updates in nova.conf.
-        bootfile_name = pxe.get_pxe_bootfile_name(instance)
-
-        opts = [{'opt_name': 'bootfile-name',
-                 'opt_value': bootfile_name},
-                {'opt_name': 'server-ip-address',
-                 'opt_value': CONF.my_ip},
-                {'opt_name': 'tftp-server',
-                 'opt_value': CONF.my_ip}
-               ]
-
-        return opts
+        return self.driver.dhcp_options_for_instance(instance)

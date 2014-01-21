@@ -25,6 +25,7 @@ from nova.compute import vm_states
 from nova import exception
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
+from nova.openstack.common import strutils
 
 LOG = logging.getLogger(__name__)
 ALIAS = "os-admin-actions"
@@ -214,11 +215,7 @@ class AdminActionsController(wsgi.Controller):
         """
         context = req.environ["nova.context"]
         authorize(context, 'create_backup')
-
-        try:
-            entity = body["create_backup"]
-        except (KeyError, TypeError):
-            raise exc.HTTPBadRequest(_("Malformed request body"))
+        entity = body["create_backup"]
 
         try:
             image_name = entity["name"]
@@ -289,6 +286,14 @@ class AdminActionsController(wsgi.Controller):
             msg = _("host, block_migration and disk_over_commit must "
                     "be specified for live migration.")
             raise exc.HTTPBadRequest(explanation=msg)
+
+        try:
+            block_migration = strutils.bool_from_string(block_migration,
+                                                        strict=True)
+            disk_over_commit = strutils.bool_from_string(disk_over_commit,
+                                                         strict=True)
+        except ValueError as err:
+            raise exc.HTTPBadRequest(explanation=str(err))
 
         try:
             instance = self.compute_api.get(context, id, want_objects=True)

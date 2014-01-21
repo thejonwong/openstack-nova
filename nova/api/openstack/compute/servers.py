@@ -938,7 +938,8 @@ class Controller(wsgi.Controller):
                             auto_disk_config=auto_disk_config,
                             scheduler_hints=scheduler_hints,
                             legacy_bdm=legacy_bdm)
-        except exception.QuotaError as error:
+        except (exception.QuotaError,
+                exception.PortLimitExceeded) as error:
             raise exc.HTTPRequestEntityTooLarge(
                 explanation=error.format_message(),
                 headers={'Retry-After': 0})
@@ -973,7 +974,8 @@ class Controller(wsgi.Controller):
                 exception.NetworkNotFound,
                 exception.PortNotFound,
                 exception.SecurityGroupNotFound,
-                exception.InvalidBDM) as error:
+                exception.InvalidBDM,
+                exception.InstanceUserDataMalformed) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
         except (exception.PortInUse,
                 exception.NoUniqueMatch) as error:
@@ -1073,6 +1075,8 @@ class Controller(wsgi.Controller):
         except exception.MigrationNotFound:
             msg = _("Instance has not been resized.")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'confirmResize')
@@ -1093,6 +1097,8 @@ class Controller(wsgi.Controller):
         except exception.FlavorNotFound:
             msg = _("Flavor used by the instance could not be found.")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'revertResize')
@@ -1124,6 +1130,8 @@ class Controller(wsgi.Controller):
 
         try:
             self.compute_api.reboot(context, instance, reboot_type)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'reboot')
@@ -1133,7 +1141,6 @@ class Controller(wsgi.Controller):
         """Begin the resize process with given instance/flavor."""
         context = req.environ["nova.context"]
         instance = self._get_server(context, req, instance_id)
-
         try:
             self.compute_api.resize(context, instance, flavor_id, **kwargs)
         except exception.QuotaError as error:
@@ -1146,6 +1153,8 @@ class Controller(wsgi.Controller):
         except exception.CannotResizeToSameFlavor:
             msg = _("Resize requires a flavor change.")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'resize')
@@ -1171,6 +1180,8 @@ class Controller(wsgi.Controller):
         except exception.NotFound:
             msg = _("Instance could not be found")
             raise exc.HTTPNotFound(explanation=msg)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'delete')
@@ -1328,15 +1339,20 @@ class Controller(wsgi.Controller):
         self._validate_metadata(kwargs.get('metadata', {}))
 
         if 'files_to_inject' in kwargs:
-            personality = kwargs['files_to_inject']
-            kwargs['files_to_inject'] = self._get_injected_files(personality)
+            personality = kwargs.pop('files_to_inject')
+            files_to_inject = self._get_injected_files(personality)
+        else:
+            files_to_inject = None
 
         try:
             self.compute_api.rebuild(context,
                                      instance,
                                      image_href,
                                      password,
+                                     files_to_inject=files_to_inject,
                                      **kwargs)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'rebuild')

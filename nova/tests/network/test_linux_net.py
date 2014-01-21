@@ -25,11 +25,13 @@ from oslo.config import cfg
 
 from nova import context
 from nova import db
+from nova import exception
 from nova.network import driver
 from nova.network import linux_net
 from nova.openstack.common import fileutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import processutils
 from nova.openstack.common import timeutils
 from nova import test
 from nova import utils
@@ -445,6 +447,22 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
         driver.plug({"bridge": "br100", "bridge_interface": "eth0"},
                     "fakemac")
 
+    def test_linux_ovs_driver_plug_exception(self):
+        self.flags(fake_network=False)
+
+        def fake_execute(*args, **kwargs):
+            raise processutils.ProcessExecutionError('error')
+
+        def fake_device_exists(*args, **kwargs):
+            return False
+
+        self.stubs.Set(utils, 'execute', fake_execute)
+        self.stubs.Set(linux_net, 'device_exists', fake_device_exists)
+        driver = linux_net.LinuxOVSInterfaceDriver()
+        self.assertRaises(exception.AgentError,
+                          driver.plug, {'uuid': 'fake_network_uuid'},
+                          'fake_mac')
+
     def test_vlan_override(self):
         """Makes sure vlan_interface flag overrides network bridge_interface.
 
@@ -516,7 +534,12 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
             executes.append(args)
             return "", ""
 
+        def fake_add_dhcp_mangle_rule(*args, **kwargs):
+            executes.append(args)
+
         self.stubs.Set(linux_net, '_execute', fake_execute)
+        self.stubs.Set(linux_net, '_add_dhcp_mangle_rule',
+                       fake_add_dhcp_mangle_rule)
 
         self.stubs.Set(os, 'chmod', lambda *a, **kw: None)
         self.stubs.Set(linux_net, 'write_to_file', lambda *a, **kw: None)
@@ -552,7 +575,7 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
 
             if extra_expected:
                 expected += extra_expected
-            self.assertEqual([tuple(expected)], executes)
+            self.assertEqual([(dev,), tuple(expected)], executes)
 
     def test_dnsmasq_execute(self):
         self._test_dnsmasq_execute()
@@ -764,6 +787,8 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
                 return existing, ""
             if args[0] == 'ip' and args[1] == 'route' and args[2] == 'show':
                 return routes, ""
+            if args[0] == 'sysctl':
+                return '1\n', ''
         self.stubs.Set(utils, 'execute', fake_execute)
         network = {'dhcp_server': '192.168.1.1',
                    'cidr': '192.168.1.0/24',
@@ -780,7 +805,7 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
             "    inet6 dead::beef:dead:beef:dead/64 scope link\n"
             "    valid_lft forever preferred_lft forever\n")
         expected = [
-            ('sysctl', '-w', 'net.ipv4.ip_forward=1'),
+            ('sysctl', '-n', 'net.ipv4.ip_forward'),
             ('ip', 'addr', 'show', 'dev', 'eth0', 'scope', 'global'),
             ('ip', 'route', 'show', 'dev', 'eth0'),
             ('ip', 'addr', 'del', '192.168.0.1/24',
@@ -804,7 +829,7 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
             "    inet6 dead::beef:dead:beef:dead/64 scope link\n"
             "    valid_lft forever preferred_lft forever\n")
         expected = [
-            ('sysctl', '-w', 'net.ipv4.ip_forward=1'),
+            ('sysctl', '-n', 'net.ipv4.ip_forward'),
             ('ip', 'addr', 'show', 'dev', 'eth0', 'scope', 'global'),
             ('ip', 'route', 'show', 'dev', 'eth0'),
             ('ip', 'route', 'del', 'default', 'dev', 'eth0'),
@@ -833,7 +858,7 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
             "    inet6 dead::beef:dead:beef:dead/64 scope link\n"
             "    valid_lft forever preferred_lft forever\n")
         expected = [
-            ('sysctl', '-w', 'net.ipv4.ip_forward=1'),
+            ('sysctl', '-n', 'net.ipv4.ip_forward'),
             ('ip', 'addr', 'show', 'dev', 'eth0', 'scope', 'global'),
             ('ip', '-f', 'inet6', 'addr', 'change',
              '2001:db8::/64', 'dev', 'eth0'),
@@ -847,7 +872,7 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
             "    inet6 dead::beef:dead:beef:dead/64 scope link\n"
             "    valid_lft forever preferred_lft forever\n")
         expected = [
-            ('sysctl', '-w', 'net.ipv4.ip_forward=1'),
+            ('sysctl', '-n', 'net.ipv4.ip_forward'),
             ('ip', 'addr', 'show', 'dev', 'eth0', 'scope', 'global'),
             ('ip', 'route', 'show', 'dev', 'eth0'),
             ('ip', 'addr', 'add', '192.168.1.1/24',
@@ -950,7 +975,7 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
                           run_as_root=True, check_exit_code=False),
                 mock.call('ip', 'route', 'show', 'dev', 'eth0'),
                 mock.call('ip', 'addr', 'show', 'dev', 'eth0', 'scope',
-                          'global', run_as_root=True),
+                          'global'),
                 ]
             }
         with contextlib.nested(

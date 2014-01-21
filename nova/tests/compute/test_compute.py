@@ -79,6 +79,7 @@ from nova.tests import fake_network_cache_model
 from nova.tests import fake_notifier
 from nova.tests.image import fake as fake_image
 from nova.tests import matchers
+from nova.tests.objects import test_flavor
 from nova.tests.objects import test_migration
 from nova import utils
 from nova.virt import event
@@ -97,6 +98,10 @@ CONF.import_opt('default_ephemeral_format', 'nova.virt.driver')
 FAKE_IMAGE_REF = 'fake-image-ref'
 
 NODENAME = 'fakenode1'
+
+
+def fake_not_implemented(*args, **kwargs):
+    raise NotImplementedError()
 
 
 def get_primitive_instance_by_uuid(context, instance_uuid):
@@ -1090,7 +1095,7 @@ class ComputeTestCase(BaseTestCase):
         self.rt.update_available_resource(self.context.elevated())
         params = {"memory_mb": 999999999999}
         filter_properties = {'limits': {'memory_mb': None}}
-        instance = self._create_fake_instance(params)
+        instance = self._create_fake_instance_obj(params)
         self.compute.run_instance(self.context, instance, {},
                 filter_properties, [], None, None, True, None, False)
         self.assertEqual(999999999999, self.rt.compute_node['memory_mb_used'])
@@ -1101,7 +1106,7 @@ class ComputeTestCase(BaseTestCase):
         params = {"root_gb": 999999999999,
                   "ephemeral_gb": 99999999999}
         filter_properties = {'limits': {'disk_gb': None}}
-        instance = self._create_fake_instance(params)
+        instance = self._create_fake_instance_obj(params)
         self.compute.run_instance(self.context, instance, {},
                 filter_properties, [], None, None, True, None, False)
 
@@ -1110,21 +1115,21 @@ class ComputeTestCase(BaseTestCase):
         self.rt.update_available_resource(self.context.elevated())
         filter_properties = {'limits': {'memory_mb': 4096, 'disk_gb': 1000}}
         params = {"memory_mb": 1024, "root_gb": 128, "ephemeral_gb": 128}
-        instance = self._create_fake_instance(params)
+        instance = self._create_fake_instance_obj(params)
         self.compute.run_instance(self.context, instance, {},
                 filter_properties, [], None, None, True, None, False)
         self.assertEqual(1024, self.rt.compute_node['memory_mb_used'])
         self.assertEqual(256, self.rt.compute_node['local_gb_used'])
 
         params = {"memory_mb": 2048, "root_gb": 256, "ephemeral_gb": 256}
-        instance = self._create_fake_instance(params)
+        instance = self._create_fake_instance_obj(params)
         self.compute.run_instance(self.context, instance, {},
                 filter_properties, [], None, None, True, None, False)
         self.assertEqual(3072, self.rt.compute_node['memory_mb_used'])
         self.assertEqual(768, self.rt.compute_node['local_gb_used'])
 
         params = {"memory_mb": 8192, "root_gb": 8192, "ephemeral_gb": 8192}
-        instance = self._create_fake_instance(params)
+        instance = self._create_fake_instance_obj(params)
         self.assertRaises(exception.ComputeResourcesUnavailable,
                 self.compute.run_instance, self.context, instance,
                 {}, filter_properties, [], None, None, True, None, False)
@@ -1160,7 +1165,7 @@ class ComputeTestCase(BaseTestCase):
         # total_mem_mb, but is less than the oversubscribed limit:
         params = {"memory_mb": instance_mb, "root_gb": 128,
                   "ephemeral_gb": 128}
-        instance = self._create_fake_instance(params)
+        instance = self._create_fake_instance_obj(params)
 
         limits = {'memory_mb': oversub_limit_mb}
         filter_properties = {'limits': limits}
@@ -1211,7 +1216,7 @@ class ComputeTestCase(BaseTestCase):
         # total_mem_mb, but is less than the oversubscribed limit:
         params = {"memory_mb": 10, "root_gb": 1,
                   "ephemeral_gb": 1, "vcpus": 2}
-        instance = self._create_fake_instance(params)
+        instance = self._create_fake_instance_obj(params)
         self.compute.run_instance(self.context, instance, {},
                 filter_properties, [], None, None, True, None, False)
 
@@ -1220,7 +1225,7 @@ class ComputeTestCase(BaseTestCase):
         # create one more instance:
         params = {"memory_mb": 10, "root_gb": 1,
                   "ephemeral_gb": 1, "vcpus": 1}
-        instance = self._create_fake_instance(params)
+        instance = self._create_fake_instance_obj(params)
         self.compute.run_instance(self.context, instance, {},
                 filter_properties, [], None, None, True, None, False)
 
@@ -1236,7 +1241,7 @@ class ComputeTestCase(BaseTestCase):
         # now oversubscribe vcpus and fail:
         params = {"memory_mb": 10, "root_gb": 1,
                   "ephemeral_gb": 1, "vcpus": 2}
-        instance = self._create_fake_instance(params)
+        instance = self._create_fake_instance_obj(params)
 
         limits = {'vcpu': 3}
         filter_properties = {'limits': limits}
@@ -1260,7 +1265,7 @@ class ComputeTestCase(BaseTestCase):
         # build an instance, specifying an amount of disk that exceeds
         # total_disk_gb, but is less than the oversubscribed limit:
         params = {"root_gb": instance_gb, "memory_mb": 10}
-        instance = self._create_fake_instance(params)
+        instance = self._create_fake_instance_obj(params)
 
         limits = {'disk_gb': oversub_limit_gb}
         filter_properties = {'limits': limits}
@@ -1295,7 +1300,7 @@ class ComputeTestCase(BaseTestCase):
                 filter_properties, [], None, None, True, None, False)
 
     def test_create_instance_without_node_param(self):
-        instance = self._create_fake_instance({'node': None})
+        instance = self._create_fake_instance_obj({'node': None})
 
         self.compute.run_instance(self.context, instance, {}, {}, [], None,
                 None, True, None, False)
@@ -1307,7 +1312,7 @@ class ComputeTestCase(BaseTestCase):
     def test_create_instance_no_image(self):
         # Create instance with no image provided.
         params = {'image_ref': ''}
-        instance = self._create_fake_instance(params)
+        instance = self._create_fake_instance_obj(params)
         self.compute.run_instance(self.context, instance, {}, {}, [], None,
                 None, True, None, False)
         self._assert_state({'vm_state': vm_states.ACTIVE,
@@ -1398,7 +1403,7 @@ class ComputeTestCase(BaseTestCase):
         def fake(*args, **kwargs):
             raise test.TestingException()
         self.stubs.Set(self.compute.driver, 'spawn', fake)
-        instance = self._create_fake_instance()
+        instance = self._create_fake_instance_obj()
         self.assertRaises(test.TestingException, self.compute.run_instance,
                           self.context, instance=instance, request_spec={},
                           filter_properties={}, requested_networks=[],
@@ -1418,7 +1423,7 @@ class ComputeTestCase(BaseTestCase):
         Make sure that when an instance is not found during spawn
         that the network is deallocated
         """
-        instance = self._create_fake_instance()
+        instance = self._create_fake_instance_obj()
 
         def fake(*args, **kwargs):
             raise exception.InstanceNotFound(instance_id="fake")
@@ -1781,8 +1786,8 @@ class ComputeTestCase(BaseTestCase):
                            {"task_state": task_states.RESCUING})
         self.compute.rescue_instance(self.context, instance, None)
 
-        expected_notifications = ['compute.instance.exists',
-                                  'compute.instance.rescue.start',
+        expected_notifications = ['compute.instance.rescue.start',
+                                  'compute.instance.exists',
                                   'compute.instance.rescue.end']
         self.assertEqual([m.event_type for m in fake_notifier.NOTIFICATIONS],
                          expected_notifications)
@@ -1801,7 +1806,7 @@ class ComputeTestCase(BaseTestCase):
             self.assertIn('launched_at', payload)
             image_ref_url = glance.generate_image_url(FAKE_IMAGE_REF)
             self.assertEqual(payload['image_ref_url'], image_ref_url)
-        msg = fake_notifier.NOTIFICATIONS[1]
+        msg = fake_notifier.NOTIFICATIONS[0]
         self.assertIn('rescue_image_name', msg.payload)
 
         self.compute.terminate_instance(self.context,
@@ -2027,6 +2032,39 @@ class ComputeTestCase(BaseTestCase):
                                       orig_sys_metadata=sys_metadata,
                                       bdms=[], recreate=False,
                                       on_shared_storage=False)
+        self.compute.terminate_instance(self.context,
+                self._objectify(instance), [], [])
+
+    def test_rebuild_driver(self):
+        # Make sure virt drivers can override default rebuild
+        called = {'rebuild': False}
+
+        def fake(**kwargs):
+            instance = kwargs['instance']
+            instance.task_state = task_states.REBUILD_BLOCK_DEVICE_MAPPING
+            instance.save(expected_task_state=[task_states.REBUILDING])
+            instance.task_state = task_states.REBUILD_SPAWNING
+            instance.save(
+                expected_task_state=[task_states.REBUILD_BLOCK_DEVICE_MAPPING])
+            called['rebuild'] = True
+
+        self.stubs.Set(self.compute.driver, 'rebuild', fake)
+        instance = jsonutils.to_primitive(self._create_fake_instance())
+        image_ref = instance['image_ref']
+        sys_metadata = db.instance_system_metadata_get(self.context,
+                        instance['uuid'])
+        self.compute.run_instance(self.context, instance, {}, {}, [], None,
+                None, True, None, False)
+        db.instance_update(self.context, instance['uuid'],
+                           {"task_state": task_states.REBUILDING})
+        self.compute.rebuild_instance(self.context, self._objectify(instance),
+                                      image_ref, image_ref,
+                                      injected_files=[],
+                                      new_pass="new_password",
+                                      orig_sys_metadata=sys_metadata,
+                                      bdms=[], recreate=False,
+                                      on_shared_storage=False)
+        self.assertTrue(called['rebuild'])
         self.compute.terminate_instance(self.context,
                 self._objectify(instance), [], [])
 
@@ -2591,49 +2629,73 @@ class ComputeTestCase(BaseTestCase):
 
     def test_console_output(self):
         # Make sure we can get console output from instance.
-        instance = jsonutils.to_primitive(self._create_fake_instance())
-        self.compute.run_instance(self.context, instance, {}, {}, [], None,
-                None, True, None, False)
+        instance = self._create_fake_instance_obj()
+        self.compute.run_instance(self.context,
+            jsonutils.to_primitive(instance), {}, {}, [], None,
+            None, True, None, False)
 
         output = self.compute.get_console_output(self.context,
                 instance=instance, tail_length=None)
         self.assertEqual(output, 'FAKE CONSOLE OUTPUT\nANOTHER\nLAST LINE')
-        self.compute.terminate_instance(self.context,
-                self._objectify(instance), [], [])
+        self.compute.terminate_instance(self.context, instance, [], [])
 
     def test_console_output_tail(self):
         # Make sure we can get console output from instance.
-        instance = jsonutils.to_primitive(self._create_fake_instance())
-        self.compute.run_instance(self.context, instance, {}, {}, [], None,
-                None, True, None, False)
+        instance = self._create_fake_instance_obj()
+        self.compute.run_instance(self.context,
+            jsonutils.to_primitive(instance), {}, {}, [], None,
+            None, True, None, False)
 
         output = self.compute.get_console_output(self.context,
                 instance=instance, tail_length=2)
         self.assertEqual(output, 'ANOTHER\nLAST LINE')
-        self.compute.terminate_instance(self.context,
-                self._objectify(instance), [], [])
+        self.compute.terminate_instance(self.context, instance, [], [])
+
+    def test_console_output_not_implemented(self):
+        def fake_not_implemented(*args, **kwargs):
+            raise NotImplementedError()
+
+        self.stubs.Set(self.compute.driver, 'get_console_output',
+                       fake_not_implemented)
+
+        instance = self._create_fake_instance_obj()
+        self.compute.run_instance(self.context,
+            jsonutils.to_primitive(instance), {}, {}, [], None,
+            None, True, None, False)
+
+        self.assertRaises(rpc_common.ClientException,
+                          self.compute.get_console_output, self.context,
+                          instance, 0)
+
+        self.compute = utils.ExceptionHelper(self.compute)
+
+        self.assertRaises(NotImplementedError,
+                          self.compute.get_console_output, self.context,
+                          instance, 0)
+
+        self.compute.terminate_instance(self.context, instance, [], [])
 
     def test_novnc_vnc_console(self):
         # Make sure we can a vnc console for an instance.
         self.flags(vnc_enabled=True)
         self.flags(enabled=False, group='spice')
 
-        instance = jsonutils.to_primitive(self._create_fake_instance())
-        self.compute.run_instance(self.context, instance, {}, {}, [], None,
-                None, True, None, False)
+        instance = self._create_fake_instance_obj()
+        self.compute.run_instance(self.context,
+            jsonutils.to_primitive(instance), {}, {}, [], None,
+            None, True, None, False)
 
         # Try with the full instance
         console = self.compute.get_vnc_console(self.context, 'novnc',
                                                instance=instance)
         self.assertTrue(console)
 
-        self.compute.terminate_instance(self.context,
-                self._objectify(instance), [], [])
+        self.compute.terminate_instance(self.context, instance, [], [])
 
     def test_validate_console_port_vnc(self):
         self.flags(vnc_enabled=True)
         self.flags(enabled=True, group='spice')
-        instance = jsonutils.to_primitive(self._create_fake_instance())
+        instance = self._create_fake_instance_obj()
 
         def fake_driver_get_console(*args, **kwargs):
             return {'host': "fake_host", 'port': "5900",
@@ -2641,15 +2703,14 @@ class ComputeTestCase(BaseTestCase):
         self.stubs.Set(self.compute.driver, "get_vnc_console",
                        fake_driver_get_console)
 
-        self.assertTrue(self.compute.validate_console_port(self.context,
-                                                            instance,
-                                                            "5900",
-                                                            "novnc"))
+        self.assertTrue(self.compute.validate_console_port(
+            context=self.context, instance=instance, port="5900",
+            console_type="novnc"))
 
     def test_validate_console_port_spice(self):
         self.flags(vnc_enabled=True)
         self.flags(enabled=True, group='spice')
-        instance = jsonutils.to_primitive(self._create_fake_instance())
+        instance = self._create_fake_instance_obj()
 
         def fake_driver_get_console(*args, **kwargs):
             return {'host': "fake_host", 'port': "5900",
@@ -2657,15 +2718,14 @@ class ComputeTestCase(BaseTestCase):
         self.stubs.Set(self.compute.driver, "get_spice_console",
                        fake_driver_get_console)
 
-        self.assertTrue(self.compute.validate_console_port(self.context,
-                                                            instance,
-                                                            "5900",
-                                                            "spice-html5"))
+        self.assertTrue(self.compute.validate_console_port(
+            context=self.context, instance=instance, port="5900",
+            console_type="spice-html5"))
 
     def test_validate_console_port_wrong_port(self):
         self.flags(vnc_enabled=True)
         self.flags(enabled=True, group='spice')
-        instance = jsonutils.to_primitive(self._create_fake_instance())
+        instance = self._create_fake_instance_obj()
 
         def fake_driver_get_console(*args, **kwargs):
             return {'host': "fake_host", 'port': "5900",
@@ -2673,34 +2733,34 @@ class ComputeTestCase(BaseTestCase):
         self.stubs.Set(self.compute.driver, "get_vnc_console",
                        fake_driver_get_console)
 
-        self.assertFalse(self.compute.validate_console_port(self.context,
-                                                            instance,
-                                                            "wrongport",
-                                                            "spice-html5"))
+        self.assertFalse(self.compute.validate_console_port(
+            context=self.context, instance=instance, port="wrongport",
+            console_type="spice-html5"))
 
     def test_xvpvnc_vnc_console(self):
         # Make sure we can a vnc console for an instance.
         self.flags(vnc_enabled=True)
         self.flags(enabled=False, group='spice')
 
-        instance = jsonutils.to_primitive(self._create_fake_instance())
-        self.compute.run_instance(self.context, instance, {}, {}, [], None,
-                None, True, None, False)
+        instance = self._create_fake_instance_obj()
+        self.compute.run_instance(self.context,
+            jsonutils.to_primitive(instance), {}, {}, [], None,
+            None, True, None, False)
 
         console = self.compute.get_vnc_console(self.context, 'xvpvnc',
                                                instance=instance)
         self.assertTrue(console)
-        self.compute.terminate_instance(self.context,
-                self._objectify(instance), [], [])
+        self.compute.terminate_instance(self.context, instance, [], [])
 
     def test_invalid_vnc_console_type(self):
         # Raise useful error if console type is an unrecognised string.
         self.flags(vnc_enabled=True)
         self.flags(enabled=False, group='spice')
 
-        instance = jsonutils.to_primitive(self._create_fake_instance())
-        self.compute.run_instance(self.context, instance, {}, {}, [], None,
-                None, True, None, False)
+        instance = self._create_fake_instance_obj()
+        self.compute.run_instance(self.context,
+            jsonutils.to_primitive(instance), {}, {}, [], None,
+            None, True, None, False)
 
         self.assertRaises(rpc_common.ClientException,
                           self.compute.get_vnc_console,
@@ -2712,17 +2772,17 @@ class ComputeTestCase(BaseTestCase):
                           self.compute.get_vnc_console,
                           self.context, 'invalid', instance=instance)
 
-        self.compute.terminate_instance(self.context,
-                self._objectify(instance), [], [])
+        self.compute.terminate_instance(self.context, instance, [], [])
 
     def test_missing_vnc_console_type(self):
         # Raise useful error is console type is None.
         self.flags(vnc_enabled=True)
         self.flags(enabled=False, group='spice')
 
-        instance = jsonutils.to_primitive(self._create_fake_instance())
-        self.compute.run_instance(self.context, instance, {}, {}, [], None,
-                None, True, None, False)
+        instance = self._create_fake_instance_obj()
+        self.compute.run_instance(self.context,
+            jsonutils.to_primitive(instance), {}, {}, [], None,
+            None, True, None, False)
 
         self.assertRaises(rpc_common.ClientException,
                           self.compute.get_vnc_console,
@@ -2734,8 +2794,28 @@ class ComputeTestCase(BaseTestCase):
                           self.compute.get_vnc_console,
                           self.context, None, instance=instance)
 
-        self.compute.terminate_instance(self.context,
-                self._objectify(instance), [], [])
+        self.compute.terminate_instance(self.context, instance, [], [])
+
+    def test_get_vnc_console_not_implemented(self):
+        self.stubs.Set(self.compute.driver, 'get_vnc_console',
+                       fake_not_implemented)
+
+        instance = self._create_fake_instance_obj()
+        self.compute.run_instance(self.context,
+            jsonutils.to_primitive(instance), {}, {}, [], None,
+            None, True, None, False)
+
+        self.assertRaises(rpc_common.ClientException,
+                          self.compute.get_vnc_console,
+                          self.context, 'novnc', instance=instance)
+
+        self.compute = utils.ExceptionHelper(self.compute)
+
+        self.assertRaises(NotImplementedError,
+                          self.compute.get_vnc_console,
+                          self.context, 'novnc', instance=instance)
+
+        self.compute.terminate_instance(self.context, instance, [], [])
 
     def test_spicehtml5_spice_console(self):
         # Make sure we can a spice console for an instance.
@@ -2801,9 +2881,8 @@ class ComputeTestCase(BaseTestCase):
     def test_vnc_console_instance_not_ready(self):
         self.flags(vnc_enabled=True)
         self.flags(enabled=False, group='spice')
-        instance = self._create_fake_instance(
+        instance = self._create_fake_instance_obj(
                 params={'vm_state': vm_states.BUILDING})
-        instance = jsonutils.to_primitive(instance)
 
         def fake_driver_get_console(*args, **kwargs):
             raise exception.InstanceNotFound(instance_id=instance['uuid'])
@@ -4725,10 +4804,14 @@ class ComputeTestCase(BaseTestCase):
         """
         # Create stubs
         result = {}
+        # No share storage live migration don't need to destroy at source
+        # server because instance has been migrated to destination, but a
+        # cleanup for block device and network are needed.
 
-        def fakedestroy(*args, **kwargs):
-            result['destroyed'] = True
-        self.stubs.Set(self.compute.driver, 'destroy', fakedestroy)
+        def fakecleanup(*args, **kwargs):
+            result['cleanup'] = True
+
+        self.stubs.Set(self.compute.driver, 'cleanup', fakecleanup)
         dest = 'desthost'
         srchost = self.compute.host
 
@@ -4768,8 +4851,8 @@ class ComputeTestCase(BaseTestCase):
         migrate_data = {'is_shared_storage': False}
         self.compute._post_live_migration(c, inst_ref, dest,
                                           migrate_data=migrate_data)
-        self.assertIn('destroyed', result)
-        self.assertTrue(result['destroyed'] == True)
+        self.assertIn('cleanup', result)
+        self.assertEqual(result['cleanup'], True)
 
     def test_post_live_migration_working_correctly(self):
         # Confirm post_live_migration() works as expected correctly.
@@ -4912,6 +4995,10 @@ class ComputeTestCase(BaseTestCase):
         self.compute.network_api.setup_networks_on_host(c, instance,
                                                         self.compute.host,
                                                         teardown=True)
+        self.mox.StubOutWithMock(self.compute.driver,
+                                 'rollback_live_migration_at_destination')
+        self.compute.driver.rollback_live_migration_at_destination(c,
+                instance, [], {'block_device_mapping': []})
 
         # start test
         self.mox.ReplayAll()
@@ -5082,7 +5169,7 @@ class ComputeTestCase(BaseTestCase):
                                                   instance,
                                                   NotImplementedError(message))
 
-    def test_cleanup_running_deleted_instances(self):
+    def _test_cleanup_running(self, action):
         admin_context = context.get_admin_context()
         deleted_at = (timeutils.utcnow() -
                       datetime.timedelta(hours=1, minutes=5))
@@ -5098,29 +5185,80 @@ class ComputeTestCase(BaseTestCase):
                             'host': self.compute.host}).AndReturn([instance1,
                                                                    instance2])
         self.flags(running_deleted_instance_timeout=3600,
-                   running_deleted_instance_action='reap')
+                   running_deleted_instance_action=action)
 
+        return admin_context, instance1, instance2
+
+    def test_cleanup_running_deleted_instances_reap(self):
         bdms = []
+
+        ctxt, inst1, inst2 = self._test_cleanup_running('reap')
 
         self.mox.StubOutWithMock(self.compute, "_shutdown_instance")
         # Simulate an error and make sure cleanup proceeds with next instance.
-        self.compute._shutdown_instance(admin_context,
-                                        instance1,
-                                        bdms,
-                                        notify=False).\
+        self.compute._shutdown_instance(ctxt, inst1, bdms, notify=False).\
                                         AndRaise(test.TestingException)
-        self.compute._shutdown_instance(admin_context,
-                                        instance2,
-                                        bdms,
-                                        notify=False).AndReturn(None)
+        self.compute._shutdown_instance(ctxt, inst2, bdms, notify=False).\
+                                        AndReturn(None)
 
         self.mox.StubOutWithMock(self.compute, "_cleanup_volumes")
-        self.compute._cleanup_volumes(admin_context,
-                                      instance1['uuid'],
-                                      bdms).AndReturn(None)
+        self.compute._cleanup_volumes(ctxt, inst1['uuid'], bdms).\
+                                      AndReturn(None)
 
         self.mox.ReplayAll()
-        self.compute._cleanup_running_deleted_instances(admin_context)
+        self.compute._cleanup_running_deleted_instances(ctxt)
+
+    def test_cleanup_running_deleted_instances_shutdown(self):
+        ctxt, inst1, inst2 = self._test_cleanup_running('shutdown')
+
+        self.mox.StubOutWithMock(self.compute.driver, 'set_bootable')
+        self.mox.StubOutWithMock(self.compute.driver, 'power_off')
+
+        self.compute.driver.set_bootable(inst1, False)
+        self.compute.driver.power_off(inst1)
+        self.compute.driver.set_bootable(inst2, False)
+        self.compute.driver.power_off(inst2)
+
+        self.mox.ReplayAll()
+        self.compute._cleanup_running_deleted_instances(ctxt)
+
+    def test_cleanup_running_deleted_instances_shutdown_notimpl(self):
+        ctxt, inst1, inst2 = self._test_cleanup_running('shutdown')
+
+        self.mox.StubOutWithMock(self.compute.driver, 'set_bootable')
+        self.mox.StubOutWithMock(self.compute.driver, 'power_off')
+
+        self.compute.driver.set_bootable(inst1, False).AndRaise(
+                NotImplementedError)
+        compute_manager.LOG.warn(mox.IgnoreArg())
+        self.compute.driver.power_off(inst1)
+        self.compute.driver.set_bootable(inst2, False).AndRaise(
+                NotImplementedError)
+        compute_manager.LOG.warn(mox.IgnoreArg())
+        self.compute.driver.power_off(inst2)
+
+        self.mox.ReplayAll()
+        self.compute._cleanup_running_deleted_instances(ctxt)
+
+    def test_cleanup_running_deleted_instances_shutdown_error(self):
+        ctxt, inst1, inst2 = self._test_cleanup_running('shutdown')
+
+        self.mox.StubOutWithMock(self.compute.driver, 'set_bootable')
+        self.mox.StubOutWithMock(self.compute.driver, 'power_off')
+
+        self.mox.StubOutWithMock(compute_manager.LOG, 'exception')
+        e = test.TestingException('bad')
+
+        self.compute.driver.set_bootable(inst1, False)
+        self.compute.driver.power_off(inst1).AndRaise(e)
+        compute_manager.LOG.warn(mox.IgnoreArg())
+
+        self.compute.driver.set_bootable(inst2, False)
+        self.compute.driver.power_off(inst2).AndRaise(e)
+        compute_manager.LOG.warn(mox.IgnoreArg())
+
+        self.mox.ReplayAll()
+        self.compute._cleanup_running_deleted_instances(ctxt)
 
     def test_running_deleted_instances(self):
         admin_context = context.get_admin_context()
@@ -5273,7 +5411,7 @@ class ComputeTestCase(BaseTestCase):
         unrescued_instances = {'fake_uuid1': False, 'fake_uuid2': False}
 
         def fake_instance_get_all_by_filters(context, filters,
-                                             columns_to_join):
+                                             columns_to_join, use_slave=False):
             self.assertEqual(columns_to_join, [])
             return instances
 
@@ -5810,7 +5948,8 @@ class ComputeTestCase(BaseTestCase):
 
         instance_obj.InstanceList.get_by_filters(
             ctxt, mox.IgnoreArg(),
-            expected_attrs=instance_obj.INSTANCE_DEFAULT_FIELDS
+            expected_attrs=instance_obj.INSTANCE_DEFAULT_FIELDS,
+            use_slave=True
             ).AndReturn(instances)
 
         # The first instance delete fails.
@@ -6010,6 +6149,45 @@ class ComputeTestCase(BaseTestCase):
         self.compute._default_block_device_names(self.context,
                                                  instance,
                                                  {}, bdms)
+
+    def test_default_block_device_names_calls_db_update(self):
+        instance, bdms = self._get_instance_and_bdm_for_dev_defaults_tests()
+        instance['root_device_name'] = None
+        bdms[0]['device_name'] = None
+        bdms.append({'id': 4, 'instance_uuid': 'fake-instance',
+                     'source_type': 'volume', 'device_name': None,
+                     'destination_type': 'volume',
+                     'volume_id': 'fake-volume-id-1'})
+
+        self.mox.StubOutWithMock(self.compute.driver,
+                                 'default_root_device_name')
+        self.mox.StubOutWithMock(compute_utils, 'get_next_device_name')
+        self.mox.StubOutWithMock(self.compute, '_instance_update')
+        self.mox.StubOutWithMock(self.compute.driver,
+                                 'default_device_names_for_instance')
+        self.mox.StubOutWithMock(self.compute.conductor_api,
+                                 'block_device_mapping_update')
+
+        self.compute.driver.default_root_device_name(
+                instance, {}, bdms[0]).AndRaise(NotImplementedError)
+        compute_utils.get_next_device_name(instance, []).AndReturn('/dev/vda')
+        self.compute._instance_update(self.context, instance['uuid'],
+                                      root_device_name='/dev/vda')
+        self.compute.conductor_api.block_device_mapping_update(
+                self.context, 3, {'device_name': '/dev/vda'})
+        self.compute.driver.default_device_names_for_instance(
+                instance, '/dev/vda', [], [], bdms).AndRaise(
+                        NotImplementedError)
+        compute_utils.get_next_device_name(
+                instance, ['/dev/vda'], '/dev/vda').AndReturn('/dev/vdb')
+        self.compute.conductor_api.block_device_mapping_update(
+                self.context, 4, {'device_name': '/dev/vdb'})
+        self.mox.ReplayAll()
+
+        self.compute._default_block_device_names(self.context,
+                                                 instance,
+                                                 {}, bdms)
+        self.assertEqual(bdms[1]['device_name'], '/dev/vdb')
 
 
 class ComputeAPITestCase(BaseTestCase):
@@ -6385,7 +6563,8 @@ class ComputeAPITestCase(BaseTestCase):
         nova.quota.QUOTAS.commit(mox.IgnoreArg(), mox.IgnoreArg())
         self.mox.ReplayAll()
 
-        instance = db.instance_get_by_uuid(self.context, instance_uuid)
+        instance = instance_obj.Instance.get_by_uuid(self.context,
+                                                     instance_uuid)
         self.compute_api.restore(self.context, instance)
 
         instance = db.instance_get_by_uuid(self.context, instance_uuid)
@@ -6399,50 +6578,53 @@ class ComputeAPITestCase(BaseTestCase):
         self.compute.run_instance(self.context, instance, {}, {}, None, None,
                 None, True, None, False)
 
-        instance = db.instance_get_by_uuid(self.context, instance_uuid)
-        self.assertIsNone(instance['task_state'])
+        instance = instance_obj.Instance.get_by_uuid(self.context,
+                                                     instance_uuid)
+        self.assertIsNone(instance.task_state)
         # Set some image metadata that should get wiped out and reset
         # as well as some other metadata that should be preserved.
-        db.instance_system_metadata_update(self.context, instance_uuid,
-                {'image_kernel_id': 'old-data',
-                 'image_ramdisk_id': 'old_data',
-                 'image_something_else': 'old-data',
-                 'image_should_remove': 'bye-bye',
-                 'preserved': 'preserve this!'},
-                True)
+        instance.system_metadata.update({
+                'image_kernel_id': 'old-data',
+                'image_ramdisk_id': 'old_data',
+                'image_something_else': 'old-data',
+                'image_should_remove': 'bye-bye',
+                'preserved': 'preserve this!'})
+
+        instance.save()
 
         # Make sure Compute API updates the image_ref before casting to
         # compute manager.
         orig_update = self.compute_api.update
-        info = {'image_ref': None}
+        info = {'image_ref': None, 'clean': False}
 
-        def update_wrapper(*args, **kwargs):
-            if 'image_ref' in kwargs:
-                info['image_ref'] = kwargs['image_ref']
-            return orig_update(*args, **kwargs)
+        def fake_rpc_rebuild(context, **kwargs):
+            info['image_ref'] = kwargs['instance'].image_ref
+            info['clean'] = kwargs['instance'].obj_what_changed() == set()
 
-        self.stubs.Set(self.compute_api, 'update', update_wrapper)
+        self.stubs.Set(self.compute_api.compute_rpcapi, 'rebuild_instance',
+                       fake_rpc_rebuild)
 
         image_ref = instance["image_ref"] + '-new_image_ref'
         password = "new_password"
 
-        db.instance_update(self.context, instance['uuid'],
-                           {"vm_state": vm_state})
+        instance.vm_state = vm_state
+        instance.save()
 
         self.compute_api.rebuild(self.context, instance, image_ref, password)
         self.assertEqual(info['image_ref'], image_ref)
+        self.assertTrue(info['clean'])
 
-        instance = db.instance_get_by_uuid(self.context, instance_uuid)
-        self.assertEqual(instance['task_state'], task_states.REBUILDING)
-        sys_metadata = db.instance_system_metadata_get(self.context,
-                instance_uuid)
-        self.assertEqual(sys_metadata,
+        instance.refresh()
+        self.assertEqual(instance.task_state, task_states.REBUILDING)
+        sys_meta = dict([(k, v) for k, v in instance.system_metadata.items()
+                         if not k.startswith('instance_type')])
+        self.assertEqual(sys_meta,
                 {'image_kernel_id': 'fake_kernel_id',
                 'image_min_disk': '1',
                 'image_ramdisk_id': 'fake_ramdisk_id',
                 'image_something_else': 'meow',
                 'preserved': 'preserve this!'})
-        db.instance_destroy(self.context, instance['uuid'])
+        instance.destroy()
 
     def test_rebuild(self):
         self._test_rebuild(vm_state=vm_states.ACTIVE)
@@ -6471,9 +6653,8 @@ class ComputeAPITestCase(BaseTestCase):
                           "new password")
 
     def test_rebuild_no_image(self):
-        instance = jsonutils.to_primitive(
-            self._create_fake_instance(params={'image_ref': ''}))
-        instance_uuid = instance['uuid']
+        instance = self._create_fake_instance_obj(params={'image_ref': ''})
+        instance_uuid = instance.uuid
         self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
         self.compute.run_instance(self.context, instance, {}, {}, None, None,
                 None, True, None, False)
@@ -6485,9 +6666,7 @@ class ComputeAPITestCase(BaseTestCase):
     def test_rebuild_with_deleted_image(self):
         # If we're given a deleted image by glance, we should not be able to
         # rebuild from it
-        instance = jsonutils.to_primitive(
-            self._create_fake_instance(params={'image_ref': '1'}))
-
+        instance = self._create_fake_instance_obj(params={'image_ref': '1'})
         self.fake_image['name'] = 'fake_name'
         self.fake_image['status'] = 'DELETED'
         self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
@@ -6501,11 +6680,11 @@ class ComputeAPITestCase(BaseTestCase):
                                      self.fake_image['id'], 'new_password')
 
     def test_rebuild_with_too_little_ram(self):
-        instance = jsonutils.to_primitive(
-            self._create_fake_instance(params={'image_ref': '1'}))
+        instance = self._create_fake_instance_obj(params={'image_ref': '1'})
 
-        def fake_extract_flavor(_inst):
-            return dict(memory_mb=64, root_gb=1)
+        def fake_extract_flavor(_inst, prefix):
+            self.assertEqual('', prefix)
+            return dict(test_flavor.fake_flavor, memory_mb=64, root_gb=1)
 
         self.stubs.Set(flavors, 'extract_flavor',
                        fake_extract_flavor)
@@ -6525,11 +6704,11 @@ class ComputeAPITestCase(BaseTestCase):
         db.instance_destroy(self.context, instance['uuid'])
 
     def test_rebuild_with_too_little_disk(self):
-        instance = jsonutils.to_primitive(
-            self._create_fake_instance(params={'image_ref': '1'}))
+        instance = self._create_fake_instance_obj(params={'image_ref': '1'})
 
-        def fake_extract_flavor(_inst):
-            return dict(memory_mb=64, root_gb=1)
+        def fake_extract_flavor(_inst, prefix):
+            self.assertEqual('', prefix)
+            return dict(test_flavor.fake_flavor, memory_mb=64, root_gb=1)
 
         self.stubs.Set(flavors, 'extract_flavor',
                        fake_extract_flavor)
@@ -6549,11 +6728,11 @@ class ComputeAPITestCase(BaseTestCase):
         db.instance_destroy(self.context, instance['uuid'])
 
     def test_rebuild_with_just_enough_ram_and_disk(self):
-        instance = jsonutils.to_primitive(
-            self._create_fake_instance(params={'image_ref': '1'}))
+        instance = self._create_fake_instance_obj(params={'image_ref': '1'})
 
-        def fake_extract_flavor(_inst):
-            return dict(memory_mb=64, root_gb=1)
+        def fake_extract_flavor(_inst, prefix):
+            self.assertEqual('', prefix)
+            return dict(test_flavor.fake_flavor, memory_mb=64, root_gb=1)
 
         self.stubs.Set(flavors, 'extract_flavor',
                        fake_extract_flavor)
@@ -6567,11 +6746,11 @@ class ComputeAPITestCase(BaseTestCase):
         db.instance_destroy(self.context, instance['uuid'])
 
     def test_rebuild_with_no_ram_and_disk_reqs(self):
-        instance = jsonutils.to_primitive(
-            self._create_fake_instance(params={'image_ref': '1'}))
+        instance = self._create_fake_instance_obj(params={'image_ref': '1'})
 
-        def fake_extract_flavor(_inst):
-            return dict(memory_mb=64, root_gb=1)
+        def fake_extract_flavor(_inst, prefix):
+            self.assertEqual('', prefix)
+            return dict(test_flavor.fake_flavor, memory_mb=64, root_gb=1)
 
         self.stubs.Set(flavors, 'extract_flavor',
                        fake_extract_flavor)
@@ -6582,11 +6761,11 @@ class ComputeAPITestCase(BaseTestCase):
         db.instance_destroy(self.context, instance['uuid'])
 
     def test_rebuild_with_too_large_image(self):
-        instance = jsonutils.to_primitive(
-            self._create_fake_instance(params={'image_ref': '1'}))
+        instance = self._create_fake_instance_obj(params={'image_ref': '1'})
 
-        def fake_extract_flavor(_inst):
-            return dict(memory_mb=64, root_gb=1)
+        def fake_extract_flavor(_inst, prefix):
+            self.assertEqual('', prefix)
+            return dict(test_flavor.fake_flavor, memory_mb=64, root_gb=1)
 
         self.stubs.Set(flavors, 'extract_flavor',
                        fake_extract_flavor)
@@ -7642,7 +7821,7 @@ class ComputeAPITestCase(BaseTestCase):
                     'namespace': None,
                     'args': {'instance': fake_instance,
                              'console_type': fake_console_type},
-                   'version': compute_rpcapi.ComputeAPI.BASE_RPC_API_VERSION}
+                   'version': '3.2'}
         rpc_msg2 = {'method': 'authorize_console',
                     'namespace': None,
                     'args': fake_connect_info,
@@ -9484,7 +9663,7 @@ class EvacuateHostTestCase(BaseTestCase):
 
         self.mox.StubOutWithMock(self.compute, '_prep_block_device')
         self.compute._prep_block_device(mox.IsA(self.context),
-                                        mox.IsA(self.inst_ref),
+                                        mox.IsA(instance_obj.Instance),
                                         mox.IgnoreArg())
 
         self.stubs.Set(self.compute.driver, 'instance_on_disk', lambda x: True)
@@ -9501,7 +9680,7 @@ class EvacuateHostTestCase(BaseTestCase):
         """Confirm evacuate scenario on shared storage."""
         self.mox.StubOutWithMock(self.compute.driver, 'spawn')
         self.compute.driver.spawn(mox.IsA(self.context),
-                mox.IsA(self.inst_ref), {}, mox.IgnoreArg(), 'newpass',
+                mox.IsA(instance_obj.Instance), {}, mox.IgnoreArg(), 'newpass',
                 network_info=mox.IgnoreArg(),
                 block_device_info=mox.IgnoreArg())
 
@@ -9521,8 +9700,9 @@ class EvacuateHostTestCase(BaseTestCase):
 
         self.mox.StubOutWithMock(self.compute.driver, 'spawn')
         self.compute.driver.spawn(mox.IsA(self.context),
-                mox.IsA(self.inst_ref), mox.IsA(fake_image), mox.IgnoreArg(),
-                mox.IsA('newpass'), network_info=mox.IgnoreArg(),
+                mox.IsA(instance_obj.Instance), mox.IsA(fake_image),
+                mox.IgnoreArg(), mox.IsA('newpass'),
+                network_info=mox.IgnoreArg(),
                 block_device_info=mox.IgnoreArg())
 
         self.stubs.Set(self.compute.driver, 'instance_on_disk',
@@ -9556,7 +9736,7 @@ class ComputeInjectedFilesTestCase(BaseTestCase):
 
     def setUp(self):
         super(ComputeInjectedFilesTestCase, self).setUp()
-        self.instance = self._create_fake_instance()
+        self.instance = self._create_fake_instance_obj()
         self.stubs.Set(self.compute.driver, 'spawn', self._spawn)
 
     def _spawn(self, context, instance, image_meta, injected_files,

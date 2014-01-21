@@ -43,7 +43,6 @@ postgres=# create database openstack_baremetal_citest with owner
 
 """
 
-import commands
 import ConfigParser
 import datetime
 import glob
@@ -58,6 +57,7 @@ import nova.db.sqlalchemy.migrate_repo
 from nova.db.sqlalchemy import utils as db_utils
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
+from nova.openstack.common import processutils
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
 from nova import test
@@ -198,6 +198,8 @@ class BaseMigrationTestCase(test.NoDBTestCase):
     PASSWD = None
     DATABASE = None
 
+    TIMEOUT_SCALING_FACTOR = 2
+
     def __init__(self, *args, **kwargs):
         super(BaseMigrationTestCase, self).__init__(*args, **kwargs)
 
@@ -252,9 +254,10 @@ class BaseMigrationTestCase(test.NoDBTestCase):
         self._create_databases()
 
     def execute_cmd(self, cmd=None):
-        status, output = commands.getstatusoutput(cmd)
+        out, err = processutils.trycmd(cmd, shell=True, discard_warnings=True)
+        output = out or err
         LOG.debug(output)
-        self.assertEqual(0, status,
+        self.assertEqual('', err,
                          "Failed to run: %s\n%s" % (cmd, output))
 
     @utils.synchronized('pgadmin', external=True)
@@ -334,11 +337,14 @@ class BaseMigrationTestCase(test.NoDBTestCase):
 
             sql = ("create database if not exists %s;") % database
             createtable = sqlcmd % {'user': user, 'host': host, 'sql': sql}
-            status, output = commands.getstatusoutput(createtable)
-            if status != 0 and status != 256:
-                # 0 means databases is created
-                # 256 means it already exists (which is fine)
-                # otherwise raise an error
+            # 0 means databases is created
+            # 256 means it already exists (which is fine)
+            # otherwise raise an error
+            out, err = processutils.trycmd(createtable, shell=True,
+                                           check_exit_code=[0, 256],
+                                           discard_warnings=True)
+            output = out or err
+            if err != '':
                 self.fail("Failed to run: %s\n%s" % (createtable, output))
 
             os.unsetenv('PGPASSWORD')
@@ -605,304 +611,6 @@ class TestNovaMigrations(BaseWalkMigrationTestCase, CommonTestsMixIn):
 
         self.assertEqual(sorted(members), sorted(index_columns))
 
-    # migration 161, fix system_metadata "None" values should be NULL
-    def _pre_upgrade_161(self, engine):
-        fake_instances = [dict(uuid='m161-uuid1')]
-        sm_base = dict(instance_uuid='m161-uuid1', value=None)
-        now = timeutils.utcnow().replace(microsecond=0)
-        fake_sys_meta = [
-            # Should be fixed
-            dict(sm_base, key='instance_type_foo', value='None'),
-            dict(sm_base, key='instance_type_bar', value='88 mph'),
-
-            # Should be unaffected
-            dict(sm_base, key='instance_type_name', value='None'),
-            dict(sm_base, key='instance_type_flavorid', value='None'),
-            dict(sm_base, key='foo', value='None'),
-            dict(sm_base, key='instance_type_bat'),
-            dict(sm_base, key='instance_type_baz', created_at=now),
-            ]
-
-        instances = db_utils.get_table(engine, 'instances')
-        sys_meta = db_utils.get_table(engine, 'instance_system_metadata')
-        engine.execute(instances.insert(), fake_instances)
-
-        data = {}
-        for sm in fake_sys_meta:
-            result = sys_meta.insert().values(sm).execute()
-            sm['id'] = result.inserted_primary_key[0]
-            data[sm['id']] = sm
-
-        return data
-
-    def _check_161(self, engine, data):
-        our_ids = data.keys()
-        sys_meta = db_utils.get_table(engine, 'instance_system_metadata')
-        results = sys_meta.select().where(sys_meta.c.id.in_(our_ids)).\
-                                    execute()
-        results = list(results)
-        self.assertEqual(len(our_ids), len(results))
-        for result in results:
-            the_id = result['id']
-            key = result['key']
-            original = data[the_id]
-
-            if key == 'instance_type_baz':
-                # Neither value nor created_at should have been altered
-                self.assertEqual(result['value'], original['value'])
-                self.assertEqual(result['created_at'], original['created_at'])
-            elif key in ['instance_type_name', 'instance_type_flavorid']:
-                # These should not have their values changed, but should
-                # have corrected created_at stamps
-                self.assertEqual(result['value'], original['value'])
-                self.assertIsInstance(result['created_at'], datetime.datetime)
-            elif key.startswith('instance_type'):
-                # Values like instance_type_% should be stamped and values
-                # converted from 'None' to None where appropriate
-                self.assertEqual(result['value'],
-                                 None if original['value'] == 'None'
-                                 else original['value'])
-                self.assertIsInstance(result['created_at'], datetime.datetime)
-            else:
-                # None of the non-instance_type values should have
-                # been touched. Since we didn't set created_at on any
-                # of them, they should all still be None.
-                self.assertEqual(result['value'], original['value'])
-                self.assertIsNone(result['created_at'])
-
-    def _pre_upgrade_172(self, engine):
-        instance_types = db_utils.get_table(engine, 'instance_types')
-        data = [
-            dict(id=21, name='uc_name0', memory_mb=128, vcpus=1,
-                 root_gb=10, ephemeral_gb=0, flavorid="uc_flavor1", swap=0,
-                 rxtx_factor=1.0, vcpu_weight=1, disabled=False,
-                 is_public=True, deleted=0),
-            dict(id=22, name='uc_name1', memory_mb=128, vcpus=1,
-                 root_gb=10, ephemeral_gb=0, flavorid="uc_flavor1", swap=0,
-                 rxtx_factor=1.0, vcpu_weight=1, disabled=False,
-                 is_public=True, deleted=0),
-            dict(id=23, name='uc_name2', memory_mb=128, vcpus=1,
-                 root_gb=10, ephemeral_gb=0, flavorid="uc_flavor2", swap=0,
-                 rxtx_factor=1.0, vcpu_weight=1, disabled=False,
-                 is_public=True, deleted=0),
-            dict(id=24, name='uc_name2', memory_mb=128, vcpus=1,
-                 root_gb=10, ephemeral_gb=0, flavorid="uc_flavor3", swap=0,
-                 rxtx_factor=1.0, vcpu_weight=1, disabled=False,
-                 is_public=True, deleted=0),
-        ]
-        engine.execute(instance_types.insert(), data)
-        return data
-
-    def _check_172(self, engine, data):
-        instance_types = db_utils.get_table(engine, 'instance_types')
-
-        not_deleted = instance_types.c.deleted != instance_types.c.id
-
-        # There is only one instance_type with flavor `uc_flavor1`
-        uc_flavor1_rows = instance_types.select().\
-                    where(instance_types.c.flavorid == 'uc_flavor1').\
-                    where(not_deleted).\
-                    execute().\
-                    fetchall()
-
-        self.assertEqual(1, len(uc_flavor1_rows))
-
-        # There is only one instance_type with name `uc_name2`
-        uc_name2_rows = instance_types.select().\
-                    where(instance_types.c.name == 'uc_name2').\
-                    where(not_deleted).\
-                    execute().\
-                    fetchall()
-        self.assertEqual(1, len(uc_name2_rows))
-
-    # migration 173, add unique constraint to keypairs
-    def _pre_upgrade_173(self, engine):
-        created_at = [timeutils.utcnow() for x in range(0, 7)]
-        fake_keypairs = [dict(name='key1', user_id='1a',
-                              created_at=created_at[0],
-                              deleted=0),
-                         dict(name='key1', user_id='1a',
-                              created_at=created_at[1],
-                              deleted=0),
-                         dict(name='key1', user_id='1a',
-                              created_at=created_at[2],
-                              deleted=0)
-                         ]
-        keypairs = db_utils.get_table(engine, 'key_pairs')
-        engine.execute(keypairs.insert(), fake_keypairs)
-        return fake_keypairs
-
-    def _check_173(self, engine, data):
-        keypairs = db_utils.get_table(engine, 'key_pairs')
-        # Unique constraints are not listed in table.constraints for any db.
-        # So, simply add a duplicate keypair to check if unique constraint
-        # is applied to the key_pairs table or not.
-        insert = keypairs.insert()
-        duplicate_keypair = dict(name='key4', user_id='4a',
-                        created_at=timeutils.utcnow(),
-                        deleted=0)
-        insert.execute(duplicate_keypair)
-        # Insert again
-        self.assertRaises(sqlalchemy.exc.IntegrityError, insert.execute,
-                          duplicate_keypair)
-
-        # Get all unique records
-        rows = keypairs.select().\
-                     where(keypairs.c.deleted != keypairs.c.id).\
-                     execute().\
-                     fetchall()
-        # Ensure the number of unique keypairs is correct
-        self.assertEqual(len(rows), 2)
-
-    def _pre_upgrade_174(self, engine):
-        instance_types = db_utils.get_table(engine, 'instance_types')
-        instance_type_projects = db_utils.get_table(engine,
-                                                    'instance_type_projects')
-
-        instance_type_data = [
-            dict(id=31, name='itp_name0', memory_mb=128, vcpus=1,
-                 root_gb=10, ephemeral_gb=0, flavorid="itp_flavor1", swap=0,
-                 rxtx_factor=1.0, vcpu_weight=1, disabled=False,
-                 is_public=True, deleted=0)
-        ]
-        instance_type_projects_data = [
-            dict(project_id='pr1', instance_type_id=31, deleted=0),
-            dict(project_id='pr1', instance_type_id=31, deleted=0),
-            dict(project_id='pr2', instance_type_id=31, deleted=0)
-        ]
-
-        engine.execute(instance_types.insert(), instance_type_data)
-        engine.execute(instance_type_projects.insert(),
-                       instance_type_projects_data)
-
-    def _check_174(self, engine, data):
-        it_projects = db_utils.get_table(engine, 'instance_type_projects')
-
-        def get_(project_id, it_id, deleted):
-            deleted_value = 0 if not deleted else it_projects.c.id
-            return it_projects.select().\
-                        where(it_projects.c.project_id == project_id).\
-                        where(it_projects.c.instance_type_id == it_id).\
-                        where(it_projects.c.deleted == deleted_value).\
-                        execute().\
-                        fetchall()
-
-        self.assertEqual(1, len(get_('pr1', '31', False)))
-        self.assertEqual(1, len(get_('pr1', '31', True)))
-        self.assertEqual(1, len(get_('pr2', '31', False)))
-        self.assertRaises(sqlalchemy.exc.IntegrityError,
-                          it_projects.insert().execute,
-                          dict(instance_type=31, project_id='pr1', deleted=0))
-
-    # migration 175, Modify volume_usage-cache, Drop column instance_id, add
-    # columns instance_uuid, project_id and user_id
-    def _pre_upgrade_175(self, engine):
-        volume_usage_cache = db_utils.get_table(engine, 'volume_usage_cache')
-        fake_usage = {'volume_id': 'fake_volume_id',
-                      'instance_id': 10,
-                      'tot_last_refreshed': timeutils.utcnow(),
-                      'tot_reads': 2,
-                      'tot_read_bytes': 3,
-                      'tot_writes': 4,
-                      'tot_write_bytes': 5,
-                      'curr_last_refreshed': timeutils.utcnow(),
-                      'curr_reads': 6,
-                      'curr_read_bytes': 7,
-                      'curr_writes': 8,
-                      'curr_write_bytes': 9}
-        volume_usage_cache.insert().execute(fake_usage)
-
-    def _check_175(self, engine, data):
-        volume_usage_cache = db_utils.get_table(engine, 'volume_usage_cache')
-        # Get the record
-        rows = volume_usage_cache.select().execute().fetchall()
-        self.assertEqual(len(rows), 1)
-
-        self.assertIsNone(rows[0]['instance_uuid'])
-        self.assertIsNone(rows[0]['project_id'])
-        self.assertIsNone(rows[0]['user_id'])
-        self.assertNotIn('instance_id', rows[0])
-
-    def _post_downgrade_175(self, engine):
-        volume_usage_cache = db_utils.get_table(engine, 'volume_usage_cache')
-        # Get the record
-        rows = volume_usage_cache.select().execute().fetchall()
-        self.assertEqual(len(rows), 1)
-
-        self.assertNotIn('instance_uuid', rows[0])
-        self.assertNotIn('project_id', rows[0])
-        self.assertNotIn('user_id', rows[0])
-        self.assertIsNone(rows[0]['instance_id'])
-
-    def _check_176(self, engine, data):
-        volume_usage_cache = db_utils.get_table(engine, 'volume_usage_cache')
-        # Get the record
-        rows = volume_usage_cache.select().execute().fetchall()
-        self.assertEqual(len(rows), 1)
-
-        self.assertIsNone(rows[0]['availability_zone'])
-
-    def _post_downgrade_176(self, engine):
-        volume_usage_cache = db_utils.get_table(engine, 'volume_usage_cache')
-        # Get the record
-        rows = volume_usage_cache.select().execute().fetchall()
-        self.assertEqual(len(rows), 1)
-
-        self.assertNotIn('availability_zone', rows[0])
-
-    def _pre_upgrade_177(self, engine):
-        floating_ips = db_utils.get_table(engine, 'floating_ips')
-        data = [
-            {'address': '128.128.128.128', 'deleted': 0},
-            {'address': '128.128.128.128', 'deleted': 0},
-            {'address': '128.128.128.129', 'deleted': 0},
-        ]
-
-        for item in data:
-            floating_ips.insert().values(item).execute()
-        return data
-
-    def _check_177(self, engine, data):
-        floating_ips = db_utils.get_table(engine, 'floating_ips')
-
-        def get_(address, deleted):
-            deleted_value = 0 if not deleted else floating_ips.c.id
-            return floating_ips.select().\
-                        where(floating_ips.c.address == address).\
-                        where(floating_ips.c.deleted == deleted_value).\
-                        execute().\
-                        fetchall()
-
-        self.assertEqual(1, len(get_('128.128.128.128', False)))
-        self.assertEqual(1, len(get_('128.128.128.128', True)))
-        self.assertEqual(1, len(get_('128.128.128.129', False)))
-        self.assertRaises(sqlalchemy.exc.IntegrityError,
-                          floating_ips.insert().execute,
-                          dict(address='128.128.128.129', deleted=0))
-
-    # migration 179 - convert cells.deleted from boolean to int
-    def _pre_upgrade_179(self, engine):
-        cells_data = [
-            {'id': 4, 'deleted': True},
-            {'id': 5, 'deleted': False},
-        ]
-
-        cells = db_utils.get_table(engine, 'cells')
-        engine.execute(cells.insert(), cells_data)
-
-        return dict(cells=cells_data)
-
-    def _check_179(self, engine, data):
-        cells = db_utils.get_table(engine, 'cells')
-        cell = cells.select(cells.c.id == 4).execute().first()
-        self.assertEqual(4, cell.deleted)
-        cell = cells.select(cells.c.id == 5).execute().first()
-        self.assertEqual(0, cell.deleted)
-
-    def _check_180(self, engine, data):
-        self.assertTrue(db_utils.check_shadow_table(engine,
-                                                    "volume_usage_cache"))
-
     def _check_181(self, engine, data):
         self.assertTrue(db_utils.check_shadow_table(engine, 'cells'))
 
@@ -995,7 +703,7 @@ class TestNovaMigrations(BaseWalkMigrationTestCase, CommonTestsMixIn):
 
         data_list = [
             ("floating_ips", {'address': '10.12.14.16', 'deleted': 0}),
-            ("instance_info_caches", {'instance_uuid': 'm161-uuid1'}),
+            ("instance_info_caches", {'instance_uuid': 'm185-uuid1'}),
             ('instance_type_projects', {'instance_type_id': 1,
                                         'project_id': '116', 'deleted': 0}),
             ('instance_types', {'flavorid': "flavorid_12", 'deleted': 0,
@@ -1029,6 +737,9 @@ class TestNovaMigrations(BaseWalkMigrationTestCase, CommonTestsMixIn):
                                   table.insert().execute, data)
 
     def _pre_upgrade_185(self, engine):
+        fake_instances = [dict(uuid='m185-uuid1')]
+        instances = db_utils.get_table(engine, 'instances')
+        engine.execute(instances.insert(), fake_instances)
         self._unique_constraint_check_migrate_185(engine, False)
 
     def check_185(self, engine):
@@ -2270,15 +1981,22 @@ class TestNovaMigrations(BaseWalkMigrationTestCase, CommonTestsMixIn):
                                    'supported_instance')
 
     def _data_209(self):
-        ret = {"compute_nodes": {"service_id": 999, "vcpus": 1, "memory_mb": 1,
-                                 "local_gb": 1, "vcpus_used": 1,
-                                 "memory_mb_used": 1, "local_gb_used": 1,
-                                 "hypervisor_type": "fake_type",
-                                 "hypervisor_version": 1, "cpu_info": "info"},
-               "instance_actions": {"instance_uuid": "fake"},
-               "migrations": {"instance_uuid": "fake"},
-               "instance_faults": {"instance_uuid": "fake", "code": 1},
-               "compute_node_stats": {"compute_node_id": 1, "key": "fake"}}
+        ret = {
+            "compute_nodes": ({"service_id": 999, "vcpus": 1, "memory_mb": 1,
+                               "local_gb": 1, "vcpus_used": 1,
+                               "memory_mb_used": 1, "local_gb_used": 1,
+                               "hypervisor_type": "fake_type",
+                               "hypervisor_version": 1, "cpu_info": "info"},
+                              ("compute_node_stats", "compute_node_id",
+                               {"key": "fake", "value": "bar"})),
+           "instance_actions": ({"instance_uuid": "fake"},
+                                ("instance_actions_events", "action_id",
+                                 {"event": "fake"})),
+           "migrations": ({"instance_uuid": "fake"}, None),
+           "instance_faults": ({"instance_uuid": "fake", "code": 1}, None),
+           "compute_node_stats": ({"compute_node_id": 1, "key": "fake"},
+                                  None),
+        }
         return ret
 
     def _constraints_209(self):
@@ -2291,16 +2009,25 @@ class TestNovaMigrations(BaseWalkMigrationTestCase, CommonTestsMixIn):
     def _pre_upgrade_209(self, engine):
         if engine.name == 'sqlite':
             return
+
         instances = db_utils.get_table(engine, 'instances')
         instances.delete().where(instances.c.uuid == None).execute()
-        tables = ["compute_nodes", "instance_actions", "migrations",
-                  "instance_faults", "compute_node_stats"]
-        change_tables = dict((i, db_utils.get_table(engine, i))
-                             for i in tables)
-        data = self._data_209()
-        for i in tables:
-            change_tables[i].delete().execute()
-            change_tables[i].insert().values(data[i]).execute()
+
+        for table_name, (row, child) in self._data_209().iteritems():
+            table = db_utils.get_table(engine, table_name)
+            table.delete().execute()
+            result = table.insert().values(row).execute()
+
+            if child:
+                # Get id of row
+                child_table_name, child_column_name, child_row = child
+
+                child_row = child_row.copy()
+                child_row[child_column_name] = result.inserted_primary_key[0]
+
+                child_table = db_utils.get_table(engine, child_table_name)
+                child_table.delete().execute()
+                child_table.insert().values(child_row).execute()
 
         # NOTE(jhesketh): Add instance with NULL uuid to check the backups
         #                 still work correctly and avoid violating the foreign
@@ -2309,49 +2036,35 @@ class TestNovaMigrations(BaseWalkMigrationTestCase, CommonTestsMixIn):
         #                 this instance inserted here causes migration 209 to
         #                 fail unless the IN set sub-query is modified
         #                 appropriately. See bug/1240325
-        db_utils.get_table(engine, 'instances').insert(
-            {'uuid': None}
-        ).execute()
+        instances.insert({'uuid': None}).execute()
 
     def _check_209(self, engine, data):
         if engine.name == 'sqlite':
             return
-        tables = ["compute_nodes", "instance_actions", "migrations",
-                  "instance_faults", "compute_node_stats"]
-        change_tables = dict((i, db_utils.get_table(engine, i))
-                             for i in tables)
-        data = self._data_209()
-        for i in tables:
-            insert_values = data[i]
-            table = change_tables[i]
+        for table_name, (row, child) in self._data_209().iteritems():
+            table = db_utils.get_table(engine, table_name)
             self.assertRaises(sqlalchemy.exc.IntegrityError,
-                              table.insert().execute,
-                              insert_values)
-            dump_table = db_utils.get_table(engine, 'dump_' + i)
+                              table.insert().values(row).execute)
+            dump_table = db_utils.get_table(engine, 'dump_' + table_name)
             self.assertEqual(len(dump_table.select().execute().fetchall()), 1)
             table.delete().execute()
             fks = [(f.column.table.name, f.column.name)
                    for f in table.foreign_keys]
-            self.assertIn(self._constraints_209().get(i), fks)
+            self.assertIn(self._constraints_209().get(table_name), fks)
 
     def _post_downgrade_209(self, engine):
         if engine.name == 'sqlite':
             return
         check_tables = engine.table_names()
-        tables = ["compute_nodes", "instance_actions", "migrations",
-                  "instance_faults", "compute_node_stats"]
-        change_tables = dict((i, db_utils.get_table(engine, i))
-                             for i in tables)
-        data = self._data_209()
-        for i in tables:
-            dump_table_name = 'dump_' + i
+        for table_name, (row, child) in self._data_209().iteritems():
+            table = db_utils.get_table(engine, table_name)
+            dump_table_name = 'dump_' + table_name
             self.assertNotIn(dump_table_name, check_tables)
-            table = change_tables[i]
-            table.insert().values(data[i]).execute()
+            table.insert().values(row).execute()
             self.assertEqual(len(table.select().execute().fetchall()), 2)
             fks = [(f.column.table.name, f.column.name)
                    for f in table.foreign_keys]
-            self.assertNotIn(self._constraints_209().get(i), fks)
+            self.assertNotIn(self._constraints_209().get(table_name), fks)
 
     def _check_210(self, engine, data):
         project_user_quotas = db_utils.get_table(engine, 'project_user_quotas')
@@ -2734,6 +2447,16 @@ class TestNovaMigrations(BaseWalkMigrationTestCase, CommonTestsMixIn):
 
     def _post_downgrade_228(self, engine):
         self.assertColumnNotExists(engine, 'compute_nodes', 'metrics')
+
+    def _check_229(self, engine, data):
+        self.assertColumnExists(engine, 'compute_nodes', 'extra_resources')
+
+        compute_nodes = db_utils.get_table(engine, 'compute_nodes')
+        self.assertTrue(isinstance(compute_nodes.c.extra_resources.type,
+                            sqlalchemy.types.Text))
+
+    def _post_downgrade_229(self, engine):
+        self.assertColumnNotExists(engine, 'compute_nodes', 'extra_resources')
 
 
 class TestBaremetalMigrations(BaseWalkMigrationTestCase, CommonTestsMixIn):

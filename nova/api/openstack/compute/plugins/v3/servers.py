@@ -262,8 +262,6 @@ class ActionDeserializer(CommonDeserializer):
         else:
             raise AttributeError("No flavor_ref was specified in request")
 
-        if self.controller:
-            self.controller.server_resize_xml_deserialize(node, resize)
         return resize
 
     def _action_confirm_resize(self, node):
@@ -310,10 +308,6 @@ class ServersController(wsgi.Controller):
     EXTENSION_REBUILD_NAMESPACE = 'nova.api.v3.extensions.server.rebuild'
     EXTENSION_DESERIALIZE_EXTRACT_REBUILD_NAMESPACE = (
         'nova.api.v3.extensions.server.rebuild.deserialize')
-
-    EXTENSION_RESIZE_NAMESPACE = 'nova.api.v3.extensions.server.resize'
-    EXTENSION_DESERIALIZE_EXTRACT_RESIZE_NAMESPACE = (
-        'nova.api.v3.extensions.server.resize.deserialize')
 
     EXTENSION_UPDATE_NAMESPACE = 'nova.api.v3.extensions.server.update'
 
@@ -431,31 +425,6 @@ class ServersController(wsgi.Controller):
                 propagate_map_exceptions=True)
         if not list(self.rebuild_xml_deserialize_manager):
             LOG.debug(_("Did not find any server rebuild xml deserializer"
-                        " extensions"))
-
-        # Look for implementation of extension point of server resize
-        self.resize_extension_manager = \
-            stevedore.enabled.EnabledExtensionManager(
-                namespace=self.EXTENSION_RESIZE_NAMESPACE,
-                check_func=_check_load_extension('server_resize'),
-                invoke_on_load=True,
-                invoke_kwds={"extension_info": self.extension_info},
-                propagate_map_exceptions=True)
-        if not list(self.resize_extension_manager):
-            LOG.debug(_("Did not find any server resize extensions"))
-
-        # Look for implementation of extension point of server resize
-        # XML deserialization
-        self.resize_xml_deserialize_manager = \
-            stevedore.enabled.EnabledExtensionManager(
-                namespace=self.EXTENSION_DESERIALIZE_EXTRACT_RESIZE_NAMESPACE,
-                check_func=_check_load_extension(
-                    'server_xml_extract_resize_deserialize'),
-                invoke_on_load=True,
-                invoke_kwds={"extension_info": self.extension_info},
-                propagate_map_exceptions=True)
-        if not list(self.resize_xml_deserialize_manager):
-            LOG.debug(_("Did not find any server resize xml deserializer"
                         " extensions"))
 
         # Look for implementation of extension point of server update
@@ -579,10 +548,8 @@ class ServersController(wsgi.Controller):
         limit, marker = common.get_limit_and_marker(req)
         try:
             instance_list = self.compute_api.get_all(context,
-                                                     search_opts=search_opts,
-                                                     limit=limit,
-                                                     marker=marker,
-                                                     want_objects=True)
+                    search_opts=search_opts, limit=limit, marker=marker,
+                    want_objects=True, expected_attrs=['pci_devices'])
         except exception.MarkerNotFound:
             msg = _('marker [%s] not found') % marker
             raise exc.HTTPBadRequest(explanation=msg)
@@ -803,7 +770,8 @@ class ServersController(wsgi.Controller):
                             admin_password=password,
                             requested_networks=requested_networks,
                             **create_kwargs)
-        except exception.QuotaError as error:
+        except (exception.QuotaError,
+                exception.PortLimitExceeded) as error:
             raise exc.HTTPRequestEntityTooLarge(
                 explanation=error.format_message(),
                 headers={'Retry-After': 0})
@@ -942,6 +910,8 @@ class ServersController(wsgi.Controller):
         except exception.MigrationNotFound:
             msg = _("Instance has not been resized.")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'confirm_resize')
@@ -961,6 +931,8 @@ class ServersController(wsgi.Controller):
         except exception.FlavorNotFound:
             msg = _("Flavor used by the instance could not be found.")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'revert_resize')
@@ -992,6 +964,8 @@ class ServersController(wsgi.Controller):
 
         try:
             self.compute_api.reboot(context, instance, reboot_type)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'reboot')
@@ -1014,6 +988,8 @@ class ServersController(wsgi.Controller):
         except exception.CannotResizeToSameFlavor:
             msg = _("Resize requires a flavor change.")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'resize')
@@ -1039,6 +1015,8 @@ class ServersController(wsgi.Controller):
         except exception.NotFound:
             msg = _("Instance could not be found")
             raise exc.HTTPNotFound(explanation=msg)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'delete')
@@ -1098,10 +1076,6 @@ class ServersController(wsgi.Controller):
 
         resize_kwargs = {}
 
-        if list(self.resize_extension_manager):
-            self.resize_extension_manager.map(self._resize_extension_point,
-                                              resize_dict, resize_kwargs)
-
         return self._resize(req, id, flavor_ref, **resize_kwargs)
 
     @wsgi.response(202)
@@ -1155,6 +1129,8 @@ class ServersController(wsgi.Controller):
                                      image_href,
                                      password,
                                      **rebuild_kwargs)
+        except exception.InstanceIsLocked as e:
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'rebuild')

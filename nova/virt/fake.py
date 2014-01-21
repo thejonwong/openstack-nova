@@ -212,6 +212,10 @@ class FakeDriver(driver.ComputeDriver):
                         {'key': key,
                          'inst': self.instances}, instance=instance)
 
+    def cleanup(self, context, instance, network_info, block_device_info=None,
+                destroy_disks=True):
+        pass
+
     def attach_volume(self, context, connection_info, instance, mountpoint,
                       encryption=None):
         """Attach the disk to the instance at mountpoint using info."""
@@ -306,10 +310,10 @@ class FakeDriver(driver.ComputeDriver):
     def interface_stats(self, instance_name, iface_id):
         return [0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L]
 
-    def get_console_output(self, instance):
+    def get_console_output(self, context, instance):
         return 'FAKE CONSOLE OUTPUT\nANOTHER\nLAST LINE'
 
-    def get_vnc_console(self, instance):
+    def get_vnc_console(self, context, instance):
         return {'internal_access_path': 'FAKE',
                 'host': 'fakevncconsole.com',
                 'port': 6969}
