@@ -5017,8 +5017,11 @@ class HostState(object):
         data["cpu_info"] = self.driver.get_cpu_info()
         data['disk_available_least'] = _get_disk_available_least()
 
-        data['pci_passthrough_devices'] = \
-            self.driver.get_pci_passthrough_devices()
+        # TODO: This is only a WORKAROUND for FreeBSD as there is no support
+        # in libvirt for pci passthrough devices yet.
+        #data['pci_passthrough_devices'] = '{}' \
+        #    self.driver.get_pci_passthrough_devices()
+        data['pci_passthrough_devices'] = '{}'
 
         self._stats = data
 
