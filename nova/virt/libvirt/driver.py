@@ -2760,9 +2760,12 @@ class LibvirtDriver(driver.ComputeDriver):
             self._caps.parse_str(xmlstr)
             if hasattr(libvirt, 'VIR_CONNECT_BASELINE_CPU_EXPAND_FEATURES'):
                 try:
-                    features = self._conn.baselineCPU(
-                        [self._caps.host.cpu.to_xml()],
-                        libvirt.VIR_CONNECT_BASELINE_CPU_EXPAND_FEATURES)
+                    # TODO: This is only a WORKAROUND for FreeBSD as baselineCPU
+                    # libvirt call is not available yet.
+                    #features = self._conn.baselineCPU(
+                    #    [self._caps.host.cpu.to_xml()],
+                    #    libvirt.VIR_CONNECT_BASELINE_CPU_EXPAND_FEATURES)
+                    features = None
                     # FIXME(wangpan): the return value of baselineCPU should be
                     #                 None or xml string, but libvirt has a bug
                     #                 of it from 1.1.2 which is fixed in 1.2.0,
